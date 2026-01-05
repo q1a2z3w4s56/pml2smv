@@ -1,0 +1,271 @@
+======================================================================
+测试:  DCCP协议PML
+======================================================================
+Processing sequence with 2 steps
+Processing sequence with 34 steps
+======================================================================
+PML解析结果 (增强版)
+======================================================================
+
+MType:  ['DCCP_REQUEST', 'DCCP_RESPONSE', 'DCCP_DATA', 'DCCP_ACK', 'DCCP_DATAACK', 'DCCP_CLOSEREQ', 'DCCP_CLOSE', 'DCCP_RESET', 'DCCP_SYNC', 'DCCP_SYNCACK']
+
+Channels (4):
+  AtoN: capacity=1, types=['mtype']
+  NtoA: capacity=1, types=['mtype']
+  BtoN: capacity=1, types=['mtype']
+  NtoB: capacity=1, types=['mtype']
+
+Global Variables (2):
+  int state[2]
+  int before_state[2]
+
+Processes (3):
+
+  Process: Network
+    States:  ['__init_Network']
+    Initial State: __init_Network
+    Local Variables:
+      mtype msg
+    Transitions (2):
+      __init_Network -> __init_Network:  [AtoN?  msg; NtoB!  msg]
+      __init_Network -> __init_Network:  [BtoN?  msg; NtoA!  msg]
+
+  Process: DCCP_AtoN
+    States:  ['CLOSED', 'LISTEN', 'REQUEST', 'RESPOND', 'PARTOPEN', 'OPEN', 'CLOSEREQ', 'CLOSING', 'TIMEWAIT']
+    Initial State: CLOSED
+    Local Variables:
+      bool I_am_active
+    State Entry Assignments:
+      CLOSED: {I_am_active=False}
+      REQUEST: {I_am_active=True}
+      RESPOND: {I_am_active=False}
+    Transitions (34):
+      CLOSED -> LISTEN:  [ε]
+      CLOSED -> REQUEST:  [AtoN!  DCCP_REQUEST]
+      LISTEN -> RESPOND:  [NtoA?  DCCP_REQUEST; AtoN!  DCCP_RESPONSE]
+      LISTEN -> CLOSED [timeout]:  [ε]
+      REQUEST -> PARTOPEN:  [NtoA?  DCCP_RESPONSE; AtoN!  DCCP_ACK]
+      REQUEST -> CLOSED:  [NtoA?  DCCP_RESET]
+      REQUEST -> CLOSED:  [NtoA?  DCCP_SYNC; AtoN!  DCCP_RESET]
+      REQUEST -> CLOSED [timeout]:  [ε]
+      RESPOND -> OPEN:  [NtoA?  DCCP_ACK]
+      RESPOND -> OPEN:  [NtoA?  DCCP_DATAACK]
+      RESPOND -> CLOSED [timeout]:  [AtoN!  DCCP_RESET]
+      RESPOND -> CLOSED [timeout]:  [ε]
+      RESPOND -> RESPOND:  [AtoN!  DCCP_DATA]
+      PARTOPEN -> OPEN:  [NtoA?  DCCP_DATA; AtoN!  DCCP_ACK]
+      PARTOPEN -> OPEN:  [NtoA?  DCCP_DATAACK; AtoN!  DCCP_ACK]
+      PARTOPEN -> PARTOPEN:  [AtoN!  DCCP_DATAACK]
+      PARTOPEN -> CLOSED [timeout]:  [ε]
+      PARTOPEN -> CLOSING:  [NtoA?  DCCP_CLOSEREQ; AtoN!  DCCP_CLOSE]
+      PARTOPEN -> CLOSED:  [NtoA?  DCCP_CLOSE; AtoN!  DCCP_RESET]
+      PARTOPEN -> OPEN:  [NtoA?  DCCP_ACK]
+      OPEN -> OPEN:  [AtoN!  DCCP_DATA]
+      OPEN -> OPEN:  [AtoN!  DCCP_DATAACK]
+      OPEN -> OPEN:  [NtoA?  DCCP_ACK]
+      OPEN -> OPEN:  [NtoA?  DCCP_DATA]
+      OPEN -> OPEN:  [NtoA?  DCCP_DATAACK]
+      OPEN -> CLOSEREQ [(I_am_active == True)]:  [AtoN!  DCCP_CLOSEREQ]
+      OPEN -> CLOSED:  [NtoA?  DCCP_CLOSE; AtoN!  DCCP_RESET]
+      OPEN -> CLOSING [(I_am_active == True)]:  [AtoN!  DCCP_CLOSE]
+      OPEN -> CLOSING:  [NtoA?  DCCP_CLOSEREQ; AtoN!  DCCP_CLOSE]
+      OPEN -> CLOSED:  [ε]
+      CLOSEREQ -> CLOSED:  [NtoA?  DCCP_CLOSE; AtoN!  DCCP_RESET]
+      CLOSING -> TIMEWAIT:  [NtoA?  DCCP_RESET]
+      CLOSING -> CLOSED [timeout]:  [ε]
+      TIMEWAIT -> CLOSED:  [ε]
+
+  Process: DCCP_BtoN
+    States:  ['CLOSED', 'LISTEN', 'REQUEST', 'RESPOND', 'PARTOPEN', 'OPEN', 'CLOSEREQ', 'CLOSING', 'TIMEWAIT']
+    Initial State: CLOSED
+    Local Variables:
+      bool I_am_active
+    State Entry Assignments:
+      CLOSED: {I_am_active=False}
+      REQUEST: {I_am_active=True}
+      RESPOND: {I_am_active=False}
+    Transitions (34):
+      CLOSED -> LISTEN:  [ε]
+      CLOSED -> REQUEST:  [BtoN!  DCCP_REQUEST]
+      LISTEN -> RESPOND:  [NtoB?  DCCP_REQUEST; BtoN!  DCCP_RESPONSE]
+      LISTEN -> CLOSED [timeout]:  [ε]
+      REQUEST -> PARTOPEN:  [NtoB?  DCCP_RESPONSE; BtoN!  DCCP_ACK]
+      REQUEST -> CLOSED:  [NtoB?  DCCP_RESET]
+      REQUEST -> CLOSED:  [NtoB?  DCCP_SYNC; BtoN!  DCCP_RESET]
+      REQUEST -> CLOSED [timeout]:  [ε]
+      RESPOND -> OPEN:  [NtoB?  DCCP_ACK]
+      RESPOND -> OPEN:  [NtoB?  DCCP_DATAACK]
+      RESPOND -> CLOSED [timeout]:  [BtoN!  DCCP_RESET]
+      RESPOND -> CLOSED [timeout]:  [ε]
+      RESPOND -> RESPOND:  [BtoN!  DCCP_DATA]
+      PARTOPEN -> OPEN:  [NtoB?  DCCP_DATA; BtoN!  DCCP_ACK]
+      PARTOPEN -> OPEN:  [NtoB?  DCCP_DATAACK; BtoN!  DCCP_ACK]
+      PARTOPEN -> PARTOPEN:  [BtoN!  DCCP_DATAACK]
+      PARTOPEN -> CLOSED [timeout]:  [ε]
+      PARTOPEN -> CLOSING:  [NtoB?  DCCP_CLOSEREQ; BtoN!  DCCP_CLOSE]
+      PARTOPEN -> CLOSED:  [NtoB?  DCCP_CLOSE; BtoN!  DCCP_RESET]
+      PARTOPEN -> OPEN:  [NtoB?  DCCP_ACK]
+      OPEN -> OPEN:  [BtoN!  DCCP_DATA]
+      OPEN -> OPEN:  [BtoN!  DCCP_DATAACK]
+      OPEN -> OPEN:  [NtoB?  DCCP_ACK]
+      OPEN -> OPEN:  [NtoB?  DCCP_DATA]
+      OPEN -> OPEN:  [NtoB?  DCCP_DATAACK]
+      OPEN -> CLOSEREQ [(I_am_active == True)]:  [BtoN!  DCCP_CLOSEREQ]
+      OPEN -> CLOSED:  [NtoB?  DCCP_CLOSE; BtoN!  DCCP_RESET]
+      OPEN -> CLOSING [(I_am_active == True)]:  [BtoN!  DCCP_CLOSE]
+      OPEN -> CLOSING:  [NtoB?  DCCP_CLOSEREQ; BtoN!  DCCP_CLOSE]
+      OPEN -> CLOSED:  [ε]
+      CLOSEREQ -> CLOSED:  [NtoB?  DCCP_CLOSE; BtoN!  DCCP_RESET]
+      CLOSING -> TIMEWAIT:  [NtoB?  DCCP_RESET]
+      CLOSING -> CLOSED [timeout]:  [ε]
+      TIMEWAIT -> CLOSED:  [ε]
+
+======================================================================
+生成的代码格式:
+======================================================================
+    # Network进程
+    network_trans = [
+        # __init_Network (2)
+        Transition.from_parsed('__init_Network', '__init_Network', None, ['AtoN?  msg', 'NtoB!  msg']),
+        Transition.from_parsed('__init_Network', '__init_Network', None, ['BtoN?  msg', 'NtoA!  msg']),
+
+    ]
+
+    network = Process(
+        name='Network',
+        states=['__init_Network'],
+        initial_state='__init_Network',
+        transitions=network_trans,
+        local_vars={'msg': 'mtype'},
+        state_entry_assignments={}
+    )
+
+    # DCCP_AtoN进程
+    dccp_aton_trans = [
+        # CLOSED (2)
+        Transition.from_parsed('CLOSED', 'LISTEN', None, []),
+        Transition.from_parsed('CLOSED', 'REQUEST', None, ['AtoN!  DCCP_REQUEST']),
+
+        # LISTEN (2)
+        Transition.from_parsed('LISTEN', 'RESPOND', None, ['NtoA?  DCCP_REQUEST', 'AtoN!  DCCP_RESPONSE']),
+        Transition.from_parsed('LISTEN', 'CLOSED', 'timeout', []),
+
+        # REQUEST (4)
+        Transition.from_parsed('REQUEST', 'PARTOPEN', None, ['NtoA?  DCCP_RESPONSE', 'AtoN!  DCCP_ACK']),
+        Transition.from_parsed('REQUEST', 'CLOSED', None, ['NtoA?  DCCP_RESET']),
+        Transition.from_parsed('REQUEST', 'CLOSED', None, ['NtoA?  DCCP_SYNC', 'AtoN!  DCCP_RESET']),
+        Transition.from_parsed('REQUEST', 'CLOSED', 'timeout', []),
+
+        # RESPOND (5)
+        Transition.from_parsed('RESPOND', 'OPEN', None, ['NtoA?  DCCP_ACK']),
+        Transition.from_parsed('RESPOND', 'OPEN', None, ['NtoA?  DCCP_DATAACK']),
+        Transition.from_parsed('RESPOND', 'CLOSED', 'timeout', ['AtoN!  DCCP_RESET']),
+        Transition.from_parsed('RESPOND', 'CLOSED', 'timeout', []),
+        Transition.from_parsed('RESPOND', 'RESPOND', None, ['AtoN!  DCCP_DATA']),
+
+        # PARTOPEN (7)
+        Transition.from_parsed('PARTOPEN', 'OPEN', None, ['NtoA?  DCCP_DATA', 'AtoN!  DCCP_ACK']),
+        Transition.from_parsed('PARTOPEN', 'OPEN', None, ['NtoA?  DCCP_DATAACK', 'AtoN!  DCCP_ACK']),
+        Transition.from_parsed('PARTOPEN', 'PARTOPEN', None, ['AtoN!  DCCP_DATAACK']),
+        Transition.from_parsed('PARTOPEN', 'CLOSED', 'timeout', []),
+        Transition.from_parsed('PARTOPEN', 'CLOSING', None, ['NtoA?  DCCP_CLOSEREQ', 'AtoN!  DCCP_CLOSE']),
+        Transition.from_parsed('PARTOPEN', 'CLOSED', None, ['NtoA?  DCCP_CLOSE', 'AtoN!  DCCP_RESET']),
+        Transition.from_parsed('PARTOPEN', 'OPEN', None, ['NtoA?  DCCP_ACK']),
+
+        # OPEN (10)
+        Transition.from_parsed('OPEN', 'OPEN', None, ['AtoN!  DCCP_DATA']),
+        Transition.from_parsed('OPEN', 'OPEN', None, ['AtoN!  DCCP_DATAACK']),
+        Transition.from_parsed('OPEN', 'OPEN', None, ['NtoA?  DCCP_ACK']),
+        Transition.from_parsed('OPEN', 'OPEN', None, ['NtoA?  DCCP_DATA']),
+        Transition.from_parsed('OPEN', 'OPEN', None, ['NtoA?  DCCP_DATAACK']),
+        Transition.from_parsed('OPEN', 'CLOSEREQ', '(I_am_active == True)', ['AtoN!  DCCP_CLOSEREQ']),
+        Transition.from_parsed('OPEN', 'CLOSED', None, ['NtoA?  DCCP_CLOSE', 'AtoN!  DCCP_RESET']),
+        Transition.from_parsed('OPEN', 'CLOSING', '(I_am_active == True)', ['AtoN!  DCCP_CLOSE']),
+        Transition.from_parsed('OPEN', 'CLOSING', None, ['NtoA?  DCCP_CLOSEREQ', 'AtoN!  DCCP_CLOSE']),
+        Transition.from_parsed('OPEN', 'CLOSED', None, []),
+
+        # CLOSEREQ (1)
+        Transition.from_parsed('CLOSEREQ', 'CLOSED', None, ['NtoA?  DCCP_CLOSE', 'AtoN!  DCCP_RESET']),
+
+        # CLOSING (2)
+        Transition.from_parsed('CLOSING', 'TIMEWAIT', None, ['NtoA?  DCCP_RESET']),
+        Transition.from_parsed('CLOSING', 'CLOSED', 'timeout', []),
+
+        # TIMEWAIT (1)
+        Transition.from_parsed('TIMEWAIT', 'CLOSED', None, []),
+
+    ]
+
+    dccp_aton = Process(
+        name='DCCP_AtoN',
+        states=['CLOSED', 'LISTEN', 'REQUEST', 'RESPOND', 'PARTOPEN', 'OPEN', 'CLOSEREQ', 'CLOSING', 'TIMEWAIT'],
+        initial_state='CLOSED',
+        transitions=dccp_aton_trans,
+        local_vars={'I_am_active': 'bool'},
+        state_entry_assignments={'CLOSED': {'I_am_active': 'False'}, 'REQUEST': {'I_am_active': 'True'}, 'RESPOND': {'I_am_active': 'False'}}
+    )
+
+    # DCCP_BtoN进程
+    dccp_bton_trans = [
+        # CLOSED (2)
+        Transition.from_parsed('CLOSED', 'LISTEN', None, []),
+        Transition.from_parsed('CLOSED', 'REQUEST', None, ['BtoN!  DCCP_REQUEST']),
+
+        # LISTEN (2)
+        Transition.from_parsed('LISTEN', 'RESPOND', None, ['NtoB?  DCCP_REQUEST', 'BtoN!  DCCP_RESPONSE']),
+        Transition.from_parsed('LISTEN', 'CLOSED', 'timeout', []),
+
+        # REQUEST (4)
+        Transition.from_parsed('REQUEST', 'PARTOPEN', None, ['NtoB?  DCCP_RESPONSE', 'BtoN!  DCCP_ACK']),
+        Transition.from_parsed('REQUEST', 'CLOSED', None, ['NtoB?  DCCP_RESET']),
+        Transition.from_parsed('REQUEST', 'CLOSED', None, ['NtoB?  DCCP_SYNC', 'BtoN!  DCCP_RESET']),
+        Transition.from_parsed('REQUEST', 'CLOSED', 'timeout', []),
+
+        # RESPOND (5)
+        Transition.from_parsed('RESPOND', 'OPEN', None, ['NtoB?  DCCP_ACK']),
+        Transition.from_parsed('RESPOND', 'OPEN', None, ['NtoB?  DCCP_DATAACK']),
+        Transition.from_parsed('RESPOND', 'CLOSED', 'timeout', ['BtoN!  DCCP_RESET']),
+        Transition.from_parsed('RESPOND', 'CLOSED', 'timeout', []),
+        Transition.from_parsed('RESPOND', 'RESPOND', None, ['BtoN!  DCCP_DATA']),
+
+        # PARTOPEN (7)
+        Transition.from_parsed('PARTOPEN', 'OPEN', None, ['NtoB?  DCCP_DATA', 'BtoN!  DCCP_ACK']),
+        Transition.from_parsed('PARTOPEN', 'OPEN', None, ['NtoB?  DCCP_DATAACK', 'BtoN!  DCCP_ACK']),
+        Transition.from_parsed('PARTOPEN', 'PARTOPEN', None, ['BtoN!  DCCP_DATAACK']),
+        Transition.from_parsed('PARTOPEN', 'CLOSED', 'timeout', []),
+        Transition.from_parsed('PARTOPEN', 'CLOSING', None, ['NtoB?  DCCP_CLOSEREQ', 'BtoN!  DCCP_CLOSE']),
+        Transition.from_parsed('PARTOPEN', 'CLOSED', None, ['NtoB?  DCCP_CLOSE', 'BtoN!  DCCP_RESET']),
+        Transition.from_parsed('PARTOPEN', 'OPEN', None, ['NtoB?  DCCP_ACK']),
+
+        # OPEN (10)
+        Transition.from_parsed('OPEN', 'OPEN', None, ['BtoN!  DCCP_DATA']),
+        Transition.from_parsed('OPEN', 'OPEN', None, ['BtoN!  DCCP_DATAACK']),
+        Transition.from_parsed('OPEN', 'OPEN', None, ['NtoB?  DCCP_ACK']),
+        Transition.from_parsed('OPEN', 'OPEN', None, ['NtoB?  DCCP_DATA']),
+        Transition.from_parsed('OPEN', 'OPEN', None, ['NtoB?  DCCP_DATAACK']),
+        Transition.from_parsed('OPEN', 'CLOSEREQ', '(I_am_active == True)', ['BtoN!  DCCP_CLOSEREQ']),
+        Transition.from_parsed('OPEN', 'CLOSED', None, ['NtoB?  DCCP_CLOSE', 'BtoN!  DCCP_RESET']),
+        Transition.from_parsed('OPEN', 'CLOSING', '(I_am_active == True)', ['BtoN!  DCCP_CLOSE']),
+        Transition.from_parsed('OPEN', 'CLOSING', None, ['NtoB?  DCCP_CLOSEREQ', 'BtoN!  DCCP_CLOSE']),
+        Transition.from_parsed('OPEN', 'CLOSED', None, []),
+
+        # CLOSEREQ (1)
+        Transition.from_parsed('CLOSEREQ', 'CLOSED', None, ['NtoB?  DCCP_CLOSE', 'BtoN!  DCCP_RESET']),
+
+        # CLOSING (2)
+        Transition.from_parsed('CLOSING', 'TIMEWAIT', None, ['NtoB?  DCCP_RESET']),
+        Transition.from_parsed('CLOSING', 'CLOSED', 'timeout', []),
+
+        # TIMEWAIT (1)
+        Transition.from_parsed('TIMEWAIT', 'CLOSED', None, []),
+
+    ]
+
+    dccp_bton = Process(
+        name='DCCP_BtoN',
+        states=['CLOSED', 'LISTEN', 'REQUEST', 'RESPOND', 'PARTOPEN', 'OPEN', 'CLOSEREQ', 'CLOSING', 'TIMEWAIT'],
+        initial_state='CLOSED',
+        transitions=dccp_bton_trans,
+        local_vars={'I_am_active': 'bool'},
+        state_entry_assignments={'CLOSED': {'I_am_active': 'False'}, 'REQUEST': {'I_am_active': 'True'}, 'RESPOND': {'I_am_active': 'False'}}
+    )
