@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-PML to SMV Converter - 完整整合版（修复 msg 变量展开）
-将 Promela (PML) 模型转换为 NuSMV 模型
+PML to SMV Converter - 修复版 v3
+正确处理 do 循环中的非确定性选择语义
 """
 
 from dataclasses import dataclass, field
@@ -11,7 +11,6 @@ import re
 import argparse
 import sys
 
-# 导入 PML 解析器
 from pml_visitor_v3 import (
     parse_pml, parse_pml_file, ProgramModel, VariableTracker,
     SendAction, ReceiveAction, AssignAction, SkipAction,
@@ -20,52 +19,41 @@ from pml_visitor_v3 import (
 
 
 # ============================================================
-# 第一部分：中间表示 (IR) 数据结构
+# IR 数据结构
 # ============================================================
 
 @dataclass
 class IRAction:
-    """中间表示的动作"""
-    action_type: str  # 'send', 'receive', 'skip'
+    action_type: str
     channel: Optional[str] = None
     message: Optional[str] = None
-    is_variable: bool = False  # 标记 message 是否是变量（需要展开）
+    is_variable: bool = False
     
     @staticmethod
-    def parse(action_str:  str, local_vars: Dict[str, str] = None) -> 'IRAction': 
-        """从字符串解析动作"""
+    def parse(action_str: str, local_vars: Dict[str, str] = None) -> 'IRAction': 
         action_str = action_str.strip()
         if action_str == 'skip' or action_str == 'ε' or not action_str: 
             return IRAction('skip')
         
         local_vars = local_vars or {}
         
-        # 解析发送:  channel!  message
-        if '!' in action_str:
+        if '!' in action_str: 
             match = re.match(r'(\w+)\s*!\s*(\w+)', action_str)
             if match:
-                channel = match.group(1)
-                message = match.group(2)
-                # 检查 message 是否是局部变量
-                is_var = message in local_vars
-                return IRAction('send', channel=channel, message=message, is_variable=is_var)
+                return IRAction('send', channel=match. group(1), message=match.group(2),
+                               is_variable=match.group(2) in local_vars)
         
-        # 解析接收:  channel? message
-        if '?' in action_str:
+        if '?' in action_str: 
             match = re.match(r'(\w+)\s*\?\s*(\w+)', action_str)
             if match: 
-                channel = match.group(1)
-                message = match.group(2)
-                # 检查 message 是否是局部变量
-                is_var = message in local_vars
-                return IRAction('receive', channel=channel, message=message, is_variable=is_var)
+                return IRAction('receive', channel=match.group(1), message=match.group(2),
+                               is_variable=match.group(2) in local_vars)
         
         return IRAction('skip')
 
 
 @dataclass
 class IRTransition:
-    """中间表示的转换"""
     source: str
     target: str
     guard: Optional[str]
@@ -73,40 +61,39 @@ class IRTransition:
     is_timeout: bool = False
     
     @classmethod
-    def from_parsed(cls, source: str, target:  str, guard: Optional[str],
+    def from_parsed(cls, source:  str, target: str, guard: Optional[str],
                     action_strs: List[str], local_vars: Dict[str, str] = None) -> 'IRTransition': 
-        """从解析结果创建转换"""
         is_timeout = guard == 'timeout' if guard else False
         if is_timeout:
             guard = None
         actions = [IRAction. parse(a, local_vars) for a in action_strs]
         return cls(source, target, guard, actions, is_timeout)
     
-    def get_recv(self) -> Optional[IRAction]: 
-        """获取接收动作"""
+    def get_recv(self) -> Optional[IRAction]:
         for a in self.actions:
             if a. action_type == 'receive':
                 return a
         return None
     
     def get_send(self) -> Optional[IRAction]:
-        """获取发送动作"""
         for a in self. actions:
             if a.action_type == 'send': 
                 return a
         return None
     
     def uses_variable_message(self) -> bool:
-        """检查转换是否使用变量消息（需要展开）"""
-        for a in self.actions:
-            if a. is_variable: 
-                return True
-        return False
+        return any(a.is_variable for a in self.actions)
+    
+    def has_channel_action(self) -> bool:
+        return any(a.action_type in ('send', 'receive') for a in self.actions)
+    
+    def is_unconditional(self) -> bool:
+        """检查是否是无条件转换（无通道操作且无守卫）"""
+        return not self. has_channel_action() and not self.guard and not self.is_timeout
 
 
 @dataclass
 class IRProcess:
-    """中间表示的进程"""
     name: str
     states: List[str]
     initial_state: str
@@ -117,43 +104,35 @@ class IRProcess:
 
 @dataclass
 class IRModel:
-    """中间表示的完整模型"""
     mtype: List[str]
     channels: List[str]
     processes: List[IRProcess]
 
 
 # ============================================================
-# 第二部分：PML 解析结果到 IR 的转换
+# PML 到 IR 转换
 # ============================================================
 
-class PMLToIRConverter:
-    """将 PML 解析结果转换为中间表示"""
-    
-    def __init__(self, program:  ProgramModel):
+class PMLToIRConverter: 
+    def __init__(self, program: ProgramModel):
         self.program = program
-        self. tracker = VariableTracker(program)
+        self.tracker = VariableTracker(program)
     
     def convert(self) -> IRModel:
-        """转换为 IR 模型"""
         mtype = self.program.mtype_values
         channels = list(self.program. channels. keys())
         
         processes = []
-        for proc_name, proc in self.program. processes.items():
+        for proc_name, proc in self.program.processes.items():
             ir_proc = self._convert_process(proc)
             processes.append(ir_proc)
         
         return IRModel(mtype=mtype, channels=channels, processes=processes)
     
     def _convert_process(self, proc) -> IRProcess: 
-        """转换单个进程"""
         analysis = self. tracker.analyze_process(proc)
-        
-        # 获取局部变量信息
         local_vars = analysis['local_vars']
         
-        # 转换转换列表
         transitions = []
         for trans in analysis['simplified_transitions']:
             ir_trans = IRTransition.from_parsed(
@@ -161,7 +140,7 @@ class PMLToIRConverter:
                 target=trans.target,
                 guard=trans.guard,
                 action_strs=trans.actions,
-                local_vars=local_vars  # 传递局部变量信息
+                local_vars=local_vars
             )
             transitions.append(ir_trans)
         
@@ -176,19 +155,121 @@ class PMLToIRConverter:
 
 
 # ============================================================
-# 第三部分：SMV 生成器
+# 条件分析器
 # ============================================================
 
-class SMVGenerator: 
-    """从 IR 生成 SMV 代码"""
+@dataclass
+class TransitionCondition:
+    """转换的使能条件分析结果"""
+    recv_channel: Optional[str] = None
+    recv_message: Optional[str] = None
+    send_channel:  Optional[str] = None
+    guard_expr: Optional[str] = None
+    is_timeout: bool = False
+    is_unconditional:  bool = False
     
+    def get_smv_condition(self, proc_name: str, proc_local_vars: Dict[str, str]) -> str:
+        """生成 SMV 条件表达式"""
+        parts = []
+        
+        if self.recv_channel and self.recv_message:
+            parts. append(f"{self.recv_channel} = {self.recv_message}")
+        
+        if self.send_channel: 
+            parts.append(f"{self. send_channel} = EMPTY")
+        
+        if self.guard_expr:
+            g = self.guard_expr. strip("()")
+            g = g.replace("==", "=")
+            g = g.replace("&&", "&")
+            g = g.replace("||", "|")
+            g = re.sub(r'\btrue\b', 'TRUE', g, flags=re. IGNORECASE)
+            g = re. sub(r'\bfalse\b', 'FALSE', g, flags=re. IGNORECASE)
+            for var_name in proc_local_vars:
+                if proc_local_vars[var_name] in ('bool', 'boolean'):
+                    g = re.sub(rf'\b{var_name}\b', f'{proc_name}_{var_name}', g)
+            parts.append(g)
+        
+        return " & ".join(parts)
+    
+    def can_coexist_with(self, other:  'TransitionCondition') -> bool:
+        """检查两个条件是否可以同时满足"""
+        # timeout 和无条件转换是独立的 fallback，不参与条件合并
+        if self.is_timeout or other.is_timeout:
+            return False
+        if self.is_unconditional or other.is_unconditional:
+            return False
+        
+        # 如果都有接收操作，必须是相同的通道和消息才能共存
+        if self.recv_channel and other.recv_channel:
+            if self.recv_channel != other.recv_channel or self.recv_message != other.recv_message:
+                return False
+        
+        # 如果一个有接收，另一个没有，它们不兼容
+        # （有接收的转换只在特定消息时使能，无接收的转换在其他时候使能）
+        if (self.recv_channel is None) != (other.recv_channel is None):
+            return False
+        
+        # 守卫条件不同则不兼容
+        if self.guard_expr != other.guard_expr:
+            return False
+        
+        return True
+        
+    def is_more_specific_than(self, other: 'TransitionCondition') -> bool:
+        """检查 self 是否比 other 更具体"""
+        self_parts = 0
+        other_parts = 0
+        
+        if self.recv_channel: 
+            self_parts += 1
+        if self.send_channel:
+            self_parts += 1
+        if self.guard_expr:
+            self_parts += 1
+            
+        if other. recv_channel: 
+            other_parts += 1
+        if other.send_channel:
+            other_parts += 1
+        if other.guard_expr:
+            other_parts += 1
+        
+        return self_parts > other_parts
+
+
+def analyze_transition(t: IRTransition) -> TransitionCondition: 
+    """分析转换的使能条件"""
+    cond = TransitionCondition()
+    cond.is_timeout = t.is_timeout
+    cond.is_unconditional = t. is_unconditional()
+    
+    recv = t.get_recv()
+    if recv:
+        cond.recv_channel = recv.channel
+        cond.recv_message = recv.message
+    
+    send = t.get_send()
+    if send:
+        cond.send_channel = send.channel
+    
+    if t.guard: 
+        cond. guard_expr = t.guard
+    
+    return cond
+
+
+# ============================================================
+# SMV 生成器 - 修复版
+# ============================================================
+
+class SMVGenerator:
     def __init__(self, model: IRModel):
         self.model = model
-        self. lines:  List[str] = []
+        self.lines:  List[str] = []
         self. indent = "  "
     
     def generate(self) -> str:
-        """生成完整的 SMV 代码"""
         self.lines = []
         self._add_header()
         self._add_variables()
@@ -199,8 +280,7 @@ class SMVGenerator:
         return "\n".join(self.lines)
     
     def _add_header(self):
-        """添加 SMV 文件头"""
-        self. lines.extend([
+        self.lines.extend([
             "-- ============================================================",
             "-- SMV Model (Auto-generated from PML)",
             "-- ============================================================",
@@ -210,39 +290,32 @@ class SMVGenerator:
         ])
     
     def _add_variables(self):
-        """添加变量声明"""
-        self.lines.append("VAR")
+        self.lines. append("VAR")
         
-        # turn 变量
         procs = ", ".join(f"P_{p. name}" for p in self.model.processes)
         self.lines.append(f"{self.indent}turn :  {{{procs}}};")
         self.lines.append("")
         
-        # 通道变量
         if self.model.mtype:
             msgs = ", ".join(["EMPTY"] + self.model.mtype)
             for ch in self.model. channels:
                 self.lines.append(f"{self.indent}{ch} : {{{msgs}}};")
             self.lines. append("")
         
-        # 进程状态变量
-        for proc in self. model.processes:
+        for proc in self.model. processes: 
             if len(proc.states) == 1:
                 states = ", ".join(proc.states + ["_DUMMY"])
             else:
                 states = ", ".join(proc. states)
             self.lines.append(f"{self.indent}{proc.name}_s : {{{states}}};")
             
-            # 局部变量（排除 mtype 类型的变量，因为它们会被展开）
             for var_name, var_type in proc.local_vars.items():
                 if var_type in ('bool', 'boolean'):
-                    self.lines.append(f"{self.indent}{proc.name}_{var_name} : boolean;")
-                # mtype 类型的局部变量不需要声明，因为会被展开
+                    self.lines.append(f"{self. indent}{proc.name}_{var_name} : boolean;")
         
         self.lines.append("")
     
     def _add_init(self):
-        """添加初始化"""
         self.lines.append("ASSIGN")
         
         procs = ", ".join(f"P_{p.name}" for p in self.model.processes)
@@ -252,9 +325,9 @@ class SMVGenerator:
             self.lines.append(f"{self.indent}init({ch}) := EMPTY;")
         
         for proc in self.model.processes:
-            self.lines.append(f"{self. indent}init({proc.name}_s) := {proc.initial_state};")
+            self.lines.append(f"{self.indent}init({proc. name}_s) := {proc.initial_state};")
             
-            for var_name, var_type in proc.local_vars. items():
+            for var_name, var_type in proc.local_vars.items():
                 if var_type in ('bool', 'boolean'):
                     init_val = "FALSE"
                     if proc.initial_state in proc.state_entry_assignments: 
@@ -266,32 +339,25 @@ class SMVGenerator:
         self.lines.append("")
     
     def _add_transitions(self):
-        """添加状态转换"""
         procs = ", ".join(f"P_{p.name}" for p in self.model.processes)
-        self.lines.append(f"{self. indent}next(turn) := {{{procs}}};")
+        self.lines.append(f"{self.indent}next(turn) := {{{procs}}};")
         self.lines.append("")
         
-        for proc in self.model. processes:
+        for proc in self.model.processes:
             self._add_process_state_transition(proc)
             self._add_process_var_transitions(proc)
         
         self._add_channel_transitions()
     
-    def _expand_transition_for_mtype(self, proc:  IRProcess, t: IRTransition) -> List[Tuple[IRTransition, str]]:
-        """
-        如果转换使用了 mtype 变量，则展开为所有可能的消息类型
-        返回 (展开后的转换, 具体消息) 的列表
-        """
+    def _expand_transition_for_mtype(self, t: IRTransition) -> List[Tuple[IRTransition, str]]:
         if not t.uses_variable_message():
             return [(t, None)]
         
-        # 找出使用变量的动作
         expanded = []
         for msg in self.model.mtype:
-            # 创建新的动作列表，替换变量为具体消息
             new_actions = []
             for a in t.actions:
-                if a. is_variable: 
+                if a. is_variable:
                     new_action = IRAction(
                         action_type=a.action_type,
                         channel=a.channel,
@@ -313,28 +379,22 @@ class SMVGenerator:
         
         return expanded
     
-    def _parse_condition(self, cond:  str) -> Set[str]:
-        """将条件字符串解析为原子条件集合"""
-        if not cond: 
-            return set()
-        return set(part.strip() for part in cond.split('&'))
-    
-    def _condition_implies(self, cond1: str, cond2: str) -> bool:
-        """检查 cond1 是否蕴含 cond2"""
-        parts1 = self._parse_condition(cond1)
-        parts2 = self._parse_condition(cond2)
-        return parts2.issubset(parts1)
+    def _format_targets(self, targets:  Set[str]) -> str:
+        if len(targets) == 1:
+            return list(targets)[0]
+        else:
+            return "{" + ", ".join(sorted(targets)) + "}"
     
     def _add_process_state_transition(self, proc: IRProcess):
-        """添加进程状态转换"""
-        self. lines.append(f"{self.indent}-- {proc.name} state")
+        """添加进程状态转换 - 正确处理非确定性"""
+        self.lines.append(f"{self.indent}-- {proc.name} state")
         self.lines.append(f"{self.indent}next({proc.name}_s) := case")
         self.lines.append(f"{self.indent}{self.indent}turn != P_{proc.name} :  {proc.name}_s;")
         
+        # 按源状态分组
         by_source:  Dict[str, List[IRTransition]] = defaultdict(list)
         for t in proc.transitions:
-            # 展开使用变量的转换
-            expanded = self._expand_transition_for_mtype(proc, t)
+            expanded = self._expand_transition_for_mtype(t)
             for exp_t, _ in expanded:
                 by_source[exp_t.source]. append(exp_t)
         
@@ -344,112 +404,152 @@ class SMVGenerator:
             
             trans_list = by_source[state]
             
-            cond_target_pairs:  List[Tuple[str, str]] = []
-            for t in trans_list: 
-                cond = self._build_guard_condition(proc, t)
-                cond_target_pairs.append((cond, t.target))
+            # 分析每个转换的条件
+            trans_with_cond:  List[Tuple[IRTransition, TransitionCondition]] = []
+            for t in trans_list:
+                cond = analyze_transition(t)
+                trans_with_cond.append((t, cond))
             
-            cond_to_targets:  Dict[str, Set[str]] = defaultdict(set)
-            for cond, target in cond_target_pairs: 
-                cond_to_targets[cond].add(target)
+            # 分类转换
+            timeout_trans = [(t, c) for t, c in trans_with_cond if c. is_timeout]
+            unconditional_trans = [(t, c) for t, c in trans_with_cond if c.is_unconditional]
+            conditional_trans = [(t, c) for t, c in trans_with_cond 
+                                if not c.is_timeout and not c.is_unconditional]
             
-            all_conds = list(cond_to_targets.keys())
+            # 生成所有可能的条件组合
+            generated_cases = self._generate_state_cases(
+                proc, state, conditional_trans, unconditional_trans, timeout_trans
+            )
             
-            merged_cond_to_targets:  Dict[str, Set[str]] = {}
-            for cond in all_conds:
-                targets = set(cond_to_targets[cond])
-                for other_cond in all_conds: 
-                    if other_cond != cond and self._condition_implies(cond, other_cond):
-                        targets.update(cond_to_targets[other_cond])
-                merged_cond_to_targets[cond] = targets
-            
-            sorted_conds = sorted(merged_cond_to_targets.keys(),
-                                  key=lambda x: (-len(self._parse_condition(x)), x))
-            
-            for cond in sorted_conds:
-                targets = merged_cond_to_targets[cond]
+            for smv_cond, targets in generated_cases: 
                 targets_str = self._format_targets(targets)
-                
-                if cond: 
+                if smv_cond: 
                     self. lines.append(
-                        f"{self.indent}{self.indent}{proc.name}_s = {state} & {cond} :  {targets_str};"
+                        f"{self.indent}{self.indent}{proc.name}_s = {state} & {smv_cond} :  {targets_str};"
                     )
                 else: 
                     self.lines.append(
-                        f"{self. indent}{self.indent}{proc.name}_s = {state} : {targets_str};"
+                        f"{self. indent}{self.indent}{proc. name}_s = {state} : {targets_str};"
                     )
         
         self.lines.append(f"{self.indent}{self.indent}TRUE :  {proc.name}_s;")
-        self.lines.append(f"{self. indent}esac;")
+        self.lines.append(f"{self.indent}esac;")
         self.lines.append("")
     
-    def _build_guard_condition(self, proc: IRProcess, t: IRTransition) -> str:
-        """构建守卫条件"""
-        parts = []
+    def _generate_state_cases(
+        self, 
+        proc: IRProcess, 
+        state: str,
+        conditional_trans: List[Tuple[IRTransition, TransitionCondition]],
+        unconditional_trans: List[Tuple[IRTransition, TransitionCondition]],
+        timeout_trans:  List[Tuple[IRTransition, TransitionCondition]]
+    ) -> List[Tuple[str, Set[str]]]: 
+        """生成状态的所有 case 分支"""
+        cases:  List[Tuple[str, Set[str]]] = []
         
-        recv = t.get_recv()
-        if recv and not recv.is_variable:
-            parts. append(f"{recv.channel} = {recv. message}")
-        elif recv and recv.is_variable:
-            # 变量接收 - 应该已经被展开了
-            parts.append(f"{recv.channel} = {recv.message}")
+        # 收集所有唯一的条件
+        unique_conds:  Dict[str, Tuple[TransitionCondition, Set[str]]] = {}
         
-        send = t.get_send()
-        if send: 
-            parts.append(f"{send. channel} = EMPTY")
+        for t, cond in conditional_trans: 
+            smv_cond = cond.get_smv_condition(proc.name, proc. local_vars)
+            if smv_cond not in unique_conds:
+                unique_conds[smv_cond] = (cond, set())
+            unique_conds[smv_cond][1].add(t. target)
         
-        if t.guard:
-            guard = self._convert_guard_expr(proc, t.guard)
-            parts.append(guard)
+        # 找出所有可以同时满足的条件组合
+        cond_list = list(unique_conds.keys())
+        cond_objs = {k: v[0] for k, v in unique_conds.items()}
         
-        return " & ".join(parts)
-    
-    def _convert_guard_expr(self, proc: IRProcess, guard: str) -> str:
-        """转换守卫表达式为 SMV 格式"""
-        g = guard.strip("()")
-        g = g.replace("==", "=")
-        g = g. replace("&&", "&")
-        g = g.replace("||", "|")
-        g = re.sub(r'\btrue\b', 'TRUE', g, flags=re. IGNORECASE)
-        g = re. sub(r'\bfalse\b', 'FALSE', g, flags=re. IGNORECASE)
+        # 生成组合条件
+        # 对于每个条件，检查哪些其他条件可以与之共存
+        processed_combinations:  Set[frozenset] = set()
         
-        for var_name in proc.local_vars:
-            if proc.local_vars[var_name] in ('bool', 'boolean'):
-                g = re.sub(rf'\b{var_name}\b', f'{proc.name}_{var_name}', g)
+        for i, cond1_str in enumerate(cond_list):
+            cond1_obj = cond_objs[cond1_str]
+            compatible_conds = [cond1_str]
+            
+            for j, cond2_str in enumerate(cond_list):
+                if i != j:
+                    cond2_obj = cond_objs[cond2_str]
+                    if cond1_obj.can_coexist_with(cond2_obj):
+                        compatible_conds.append(cond2_str)
+            
+            # 生成这个条件组合的目标
+            combo_key = frozenset(compatible_conds)
+            if combo_key in processed_combinations: 
+                continue
+            processed_combinations.add(combo_key)
+            
+            # 计算交集条件（最具体的条件）
+            # 对于可以同时满足的条件，使用最具体的那个作为 case 条件
+            combined_targets = set()
+            for c_str in compatible_conds:
+                combined_targets.update(unique_conds[c_str][1])
         
-        return g
-    
-    def _format_targets(self, targets: Set[str]) -> str:
-        """格式化目标状态集合"""
-        if len(targets) == 1:
-            return list(targets)[0]
-        else:
-            return "{" + ", ".join(sorted(targets)) + "}"
+        # 重新生成：按条件的具体程度排序
+        # 更具体的条件放前面，包含更多可能的目标
+        sorted_conds = sorted(cond_list, key=lambda x: (
+            -len([p for p in x.split('&') if p.strip()]),  # 条件数量降序
+            x  # 字典序
+        ))
+        
+        # 对于每个条件，计算其可达目标（包括兼容条件的目标）
+        for cond_str in sorted_conds:
+            cond_obj = cond_objs[cond_str]
+            targets = set(unique_conds[cond_str][1])
+            
+            # 添加所有兼容条件的目标
+            for other_cond_str in cond_list: 
+                if other_cond_str != cond_str: 
+                    other_cond_obj = cond_objs[other_cond_str]
+                    if cond_obj. can_coexist_with(other_cond_obj):
+                        targets. update(unique_conds[other_cond_str][1])
+            
+            # 如果有无条件转换，也要加入
+            for t, _ in unconditional_trans:
+                targets.add(t.target)
+            
+            cases.append((cond_str, targets))
+        
+        # 添加无条件和 timeout 的 fallback
+        fallback_targets = set()
+        for t, _ in unconditional_trans: 
+            fallback_targets.add(t.target)
+        for t, _ in timeout_trans:
+            fallback_targets. add(t.target)
+        
+        if fallback_targets: 
+            cases.append(("", fallback_targets))
+        
+        return cases
     
     def _add_process_var_transitions(self, proc: IRProcess):
         """添加进程局部变量的转换"""
         for var_name, var_type in proc. local_vars.items():
-            # 跳过 mtype 类型变量
             if var_type == 'mtype':
                 continue
-                
+            
             if var_type not in ('bool', 'boolean'):
                 continue
-                
-            full_name = f"{proc. name}_{var_name}"
             
-            assignments:  List[Tuple[str, str, str, str]] = []
+            full_name = f"{proc.name}_{var_name}"
+            
+            # 收集赋值信息
+            assignments:  List[Tuple[str, str, str, str, bool, bool]] = []
             
             for t in proc.transitions:
-                # 展开转换
-                expanded = self._expand_transition_for_mtype(proc, t)
-                for exp_t, _ in expanded:
+                expanded = self._expand_transition_for_mtype(t)
+                for exp_t, _ in expanded: 
                     if exp_t.target in proc.state_entry_assignments: 
-                        if var_name in proc.state_entry_assignments[exp_t.target]:
+                        if var_name in proc.state_entry_assignments[exp_t.target]: 
                             val = proc.state_entry_assignments[exp_t.target][var_name]
-                            cond = self._build_guard_condition(proc, exp_t)
+                            cond = analyze_transition(exp_t)
+                            smv_cond = cond.get_smv_condition(proc.name, proc.local_vars)
                             smv_val = self._convert_value(val, var_type)
-                            assignments.append((exp_t.source, exp_t.target, cond, smv_val))
+                            assignments.append((
+                                exp_t.source, exp_t.target, smv_cond, smv_val,
+                                cond.is_timeout, cond.is_unconditional
+                            ))
             
             if not assignments:
                 self.lines.append(f"{self.indent}next({full_name}) := {full_name};")
@@ -458,187 +558,193 @@ class SMVGenerator:
             
             self.lines.append(f"{self.indent}-- {full_name}")
             self.lines.append(f"{self.indent}next({full_name}) := case")
-            self.lines.append(f"{self. indent}{self.indent}turn != P_{proc.name} : {full_name};")
+            self.lines.append(f"{self.indent}{self.indent}turn != P_{proc.name} : {full_name};")
             
-            by_source: Dict[str, List[Tuple[str, str]]] = defaultdict(list)
-            for source, target, cond, val in assignments:
-                by_source[source].append((cond, val))
+            # 按源状态分组
+            by_source: Dict[str, List[Tuple[str, str, bool, bool]]] = defaultdict(list)
+            for source, target, cond, val, is_timeout, is_uncond in assignments: 
+                by_source[source].append((cond, val, is_timeout, is_uncond))
             
             for source in sorted(by_source. keys()):
-                cond_val_pairs = by_source[source]
+                items = by_source[source]
                 
+                # 分类
+                channel_items = [(c, v) for c, v, t, u in items if not t and not u and c]
+                uncond_items = [(c, v) for c, v, t, u in items if u]
+                timeout_items = [(c, v) for c, v, t, u in items if t]
+                
+                # 处理有条件的
                 cond_to_values: Dict[str, Set[str]] = defaultdict(set)
-                for cond, val in cond_val_pairs: 
+                for cond, val in channel_items: 
                     cond_to_values[cond].add(val)
                 
-                all_conds = list(cond_to_values.keys())
+                # 无条件的值
+                uncond_values = set(v for _, v in uncond_items)
                 
-                merged_cond_to_values: Dict[str, Set[str]] = {}
-                for cond in all_conds: 
+                sorted_conds = sorted(cond_to_values.keys(),
+                                     key=lambda x:  (-len(x.split('&')), x))
+                
+                for cond in sorted_conds:
                     values = set(cond_to_values[cond])
-                    for other_cond in all_conds: 
-                        if other_cond != cond and self._condition_implies(cond, other_cond):
-                            values.update(cond_to_values[other_cond])
-                    merged_cond_to_values[cond] = values
-                
-                sorted_conds = sorted(merged_cond_to_values.keys(),
-                                      key=lambda x: (-len(self._parse_condition(x)), x))
-                
-                for cond in sorted_conds: 
-                    values = merged_cond_to_values[cond]
+                    # 加入无条件的值
+                    if uncond_values: 
+                        values = values | uncond_values
                     val_str = self._format_targets(values)
-                    if cond:
-                        self.lines. append(
-                            f"{self.indent}{self.indent}{proc.name}_s = {source} & {cond} : {val_str};"
+                    if cond: 
+                        self. lines.append(
+                            f"{self.indent}{self.indent}{proc. name}_s = {source} & {cond} : {val_str};"
                         )
-                    else:
-                        self.lines.append(
-                            f"{self.indent}{self.indent}{proc. name}_s = {source} : {val_str};"
-                        )
+                
+                # 兜底
+                fallback_values = uncond_values | set(v for _, v in timeout_items)
+                if fallback_values:
+                    val_str = self._format_targets(fallback_values)
+                    self.lines.append(
+                        f"{self. indent}{self.indent}{proc.name}_s = {source} :  {val_str};"
+                    )
             
             self.lines.append(f"{self.indent}{self.indent}TRUE : {full_name};")
             self.lines.append(f"{self.indent}esac;")
             self.lines.append("")
     
-    def _convert_value(self, val: str, var_type:  str) -> str:
-        """转换值为 SMV 格式"""
+    def _convert_value(self, val: str, var_type: str) -> str:
         val = val.strip()
         if var_type in ('bool', 'boolean'):
-            if val. lower() in ('true', '1'):
+            if val.lower() in ('true', '1'):
                 return 'TRUE'
             elif val.lower() in ('false', '0'):
                 return 'FALSE'
         return val
     
     def _add_channel_transitions(self):
-        """添加通道转换"""
         for ch in self.model. channels:
             self._add_single_channel_transition(ch)
     
-    def _add_single_channel_transition(self, ch: str):
+    def _add_single_channel_transition(self, ch:  str):
         """添加单个通道的转换"""
-        self.lines.append(f"{self. indent}-- {ch}")
-        self.lines.append(f"{self.indent}next({ch}) := case")
+        self.lines.append(f"{self.indent}-- {ch}")
+        self.lines.append(f"{self. indent}next({ch}) := case")
         
-        send_data:  Dict[str, Tuple[Set[str], bool]] = {}
-        recv_conditions: List[str] = []
+        # 收集所有发送和接收操作
+        send_cases:  List[Tuple[str, Set[str]]] = []  # (condition, messages)
+        recv_cases: List[str] = []  # conditions
         
         for proc in self.model. processes:
-            by_source: Dict[str, List[IRTransition]] = defaultdict(list)
+            by_source:  Dict[str, List[IRTransition]] = defaultdict(list)
             for t in proc.transitions:
                 by_source[t. source].append(t)
             
             for state, trans_list in by_source.items():
-                # 展开所有使用变量的转换
-                expanded_trans_list = []
+                # 展开所有转换
+                expanded_trans:  List[IRTransition] = []
                 for t in trans_list:
-                    expanded = self._expand_transition_for_mtype(proc, t)
-                    for exp_t, _ in expanded:
-                        expanded_trans_list. append(exp_t)
+                    expanded = self._expand_transition_for_mtype(t)
+                    for exp_t, _ in expanded: 
+                        expanded_trans.append(exp_t)
                 
-                state_send_conds: Dict[str, Set[str]] = defaultdict(set)
-                state_has_no_send:  Dict[str, bool] = defaultdict(lambda: False)
+                # 分析每个转换
+                trans_with_cond = [(t, analyze_transition(t)) for t in expanded_trans]
                 
-                for t in expanded_trans_list:
-                    send = t.get_send()
-                    recv = t.get_recv()
+                # 处理发送操作
+                for t, cond in trans_with_cond: 
+                    if cond.is_timeout or cond.is_unconditional: 
+                        continue
                     
+                    send = t.get_send()
                     if send and send.channel == ch:
+                        # 构建发送条件
                         cond_parts = [
                             f"turn = P_{proc.name}",
                             f"{proc.name}_s = {state}",
                             f"{ch} = EMPTY"
                         ]
+                        
+                        recv = t.get_recv()
                         if recv:
                             cond_parts. append(f"{recv.channel} = {recv.message}")
-                        if t.guard:
-                            cond_parts.append(self._convert_guard_expr(proc, t.guard))
                         
-                        cond = " & ".join(cond_parts)
-                        state_send_conds[cond]. add(send.message)
+                        if cond.guard_expr:
+                            guard = cond.get_smv_condition(proc.name, proc.local_vars)
+                            # 只添加守卫部分
+                            guard_parts = [p for p in guard.split(' & ') 
+                                         if not any(c in p for c in self.model.channels)]
+                            cond_parts.extend(guard_parts)
+                        
+                        full_cond = " & ".join(cond_parts)
+                        
+                        # 检查是否有不发送的替代
+                        has_no_send_alt = False
+                        for other_t, other_cond in trans_with_cond:
+                            if other_t is t:
+                                continue
+                            other_send = other_t.get_send()
+                            if other_send is None or other_send.channel != ch:
+                                if cond.can_coexist_with(other_cond):
+                                    has_no_send_alt = True
+                                    break
+                        
+                        # 检查无条件转换
+                        if not has_no_send_alt:
+                            has_no_send_alt = any(c.is_unconditional for _, c in trans_with_cond)
+                        
+                        # 添加到发送条件
+                        found = False
+                        for i, (existing_cond, msgs) in enumerate(send_cases):
+                            if existing_cond == full_cond:
+                                msgs. add(send.message)
+                                if has_no_send_alt:
+                                    msgs.add("EMPTY")
+                                found = True
+                                break
+                        
+                        if not found:
+                            msgs = {send.message}
+                            if has_no_send_alt:
+                                msgs.add("EMPTY")
+                            send_cases. append((full_cond, msgs))
                     
+                    # 处理接收操作
+                    recv = t.get_recv()
                     if recv and recv.channel == ch:
                         cond_parts = [
                             f"turn = P_{proc.name}",
                             f"{proc.name}_s = {state}",
                             f"{ch} = {recv.message}"
                         ]
-                        if send:
-                            cond_parts.append(f"{send. channel} = EMPTY")
-                        if t.guard:
-                            cond_parts.append(self._convert_guard_expr(proc, t.guard))
                         
-                        cond = " & ".join(cond_parts)
-                        recv_conditions.append(cond)
-                
-                for cond in state_send_conds:
-                    has_no_send = False
-                    for t in expanded_trans_list: 
                         send = t.get_send()
-                        if send is None or send.channel != ch:
-                            t_full_cond_parts = [
-                                f"turn = P_{proc.name}",
-                                f"{proc.name}_s = {state}"
-                            ]
-                            t_cond = self._build_guard_condition(proc, t)
-                            if t_cond: 
-                                t_full_cond_parts.append(t_cond)
-                            
-                            send_cond_parts = self._parse_condition(cond)
-                            no_send_cond_parts = set(t_full_cond_parts)
-                            
-                            if no_send_cond_parts. issubset(send_cond_parts):
-                                has_no_send = True
-                                break
-                    
-                    state_has_no_send[cond] = has_no_send
-                
-                for cond, msgs in state_send_conds.items():
-                    if cond not in send_data:
-                        send_data[cond] = (set(), False)
-                    existing_msgs, existing_no_send = send_data[cond]
-                    existing_msgs.update(msgs)
-                    send_data[cond] = (existing_msgs, existing_no_send or state_has_no_send[cond])
+                        if send:
+                            cond_parts.append(f"{send.channel} = EMPTY")
+                        
+                        if cond.guard_expr:
+                            guard = cond. get_smv_condition(proc.name, proc.local_vars)
+                            guard_parts = [p for p in guard.split(' & ') 
+                                         if not any(c in p for c in self.model. channels)]
+                            cond_parts. extend(guard_parts)
+                        
+                        full_cond = " & ". join(cond_parts)
+                        recv_cases.append(full_cond)
         
-        all_send_conds = list(send_data. keys())
-        merged_send:  Dict[str, Tuple[Set[str], bool]] = {}
-        
-        for cond in all_send_conds: 
-            msgs, has_no_send = send_data[cond]
-            msgs = set(msgs)
-            for other_cond in all_send_conds:
-                if other_cond != cond and self._condition_implies(cond, other_cond):
-                    other_msgs, other_no_send = send_data[other_cond]
-                    msgs.update(other_msgs)
-                    has_no_send = has_no_send or other_no_send
-            merged_send[cond] = (msgs, has_no_send)
-        
-        sorted_send_conds = sorted(merged_send. keys(),
-                                   key=lambda x: (-len(self._parse_condition(x)), x))
-        
-        for cond in sorted_send_conds: 
-            msgs, has_no_send = merged_send[cond]
-            if has_no_send:
-                msgs = msgs | {"EMPTY"}
+        # 输出发送条件
+        for cond, msgs in send_cases:
             msg_str = self._format_targets(msgs)
             self.lines.append(f"{self.indent}{self.indent}{cond} :  {msg_str};")
         
-        for cond in recv_conditions:
-            self.lines.append(f"{self.indent}{self.indent}{cond} :  EMPTY;")
+        # 输出接收条件
+        for cond in recv_cases:
+            self.lines.append(f"{self. indent}{self.indent}{cond} : EMPTY;")
         
-        self. lines.append(f"{self.indent}{self.indent}TRUE : {ch};")
+        self.lines.append(f"{self.indent}{self.indent}TRUE : {ch};")
         self.lines.append(f"{self.indent}esac;")
         self.lines.append("")
     
     def _add_fairness(self):
-        """添加公平性约束"""
         self.lines.append("-- Fairness constraints")
-        for proc in self.model.processes:
+        for proc in self.model. processes:
             self. lines.append(f"FAIRNESS turn = P_{proc.name}")
         self.lines.append("")
     
     def _add_properties(self):
-        """添加 CTL 属性"""
         self.lines.append("-- CTL Properties")
         
         dccp_procs = [p for p in self.model.processes if 'DCCP' in p.name. upper()]
@@ -657,85 +763,22 @@ class SMVGenerator:
                     f"SPEC AG ({proc.name}_s = CLOSEREQ -> {proc.name}_I_am_active = TRUE)"
                 )
         
-        self.lines.append("")
+        self. lines.append("")
 
 
 # ============================================================
-# 第四部分：主转换函数
+# 辅助函数
 # ============================================================
 
 def pml_to_smv(pml_code: str, debug: bool = False) -> str:
-    """将 PML 代码转换为 SMV 代码"""
-    if debug:
-        print("=" * 70)
-        print("Step 1: Parsing PML...")
-        print("=" * 70)
-    
     program = parse_pml(pml_code, silent=not debug, debug=debug)
-    
-    if debug:
-        print(f"  Found {len(program. mtype_values)} mtype values")
-        print(f"  Found {len(program. channels)} channels")
-        print(f"  Found {len(program.processes)} processes")
-    
-    if debug:
-        print("\n" + "=" * 70)
-        print("Step 2: Converting to IR...")
-        print("=" * 70)
-    
     converter = PMLToIRConverter(program)
     ir_model = converter.convert()
-    
-    if debug:
-        print(f"  IR Model:")
-        print(f"    MType:  {ir_model. mtype}")
-        print(f"    Channels: {ir_model.channels}")
-        for proc in ir_model.processes:
-            print(f"    Process {proc.name}:")
-            print(f"      States: {proc.states}")
-            print(f"      Transitions: {len(proc.transitions)}")
-            # 检查是否有需要展开的转换
-            var_trans = [t for t in proc.transitions if t.uses_variable_message()]
-            if var_trans:
-                print(f"      Transitions with variable messages:  {len(var_trans)} (will be expanded to {len(var_trans) * len(ir_model.mtype)})")
-    
-    if debug: 
-        print("\n" + "=" * 70)
-        print("Step 3: Generating SMV...")
-        print("=" * 70)
-    
     generator = SMVGenerator(ir_model)
-    smv_code = generator.generate()
-    
-    if debug:
-        print(f"  Generated {len(smv_code. splitlines())} lines of SMV code")
-    
-    return smv_code
+    return generator.generate()
 
-
-def pml_file_to_smv(input_path: str, output_path: Optional[str] = None,
-                    debug:  bool = False) -> str:
-    """将 PML 文件转换为 SMV 文件"""
-    with open(input_path, 'r', encoding='utf-8') as f:
-        pml_code = f.read()
-    
-    smv_code = pml_to_smv(pml_code, debug=debug)
-    
-    if output_path: 
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(smv_code)
-        if debug:
-            print(f"\nSMV code written to: {output_path}")
-    
-    return smv_code
-
-
-# ============================================================
-# 第五部分：打印中间结果函数
-# ============================================================
 
 def print_ir_model(ir_model: IRModel):
-    """打印 IR 模型"""
     print("=" * 70)
     print("Intermediate Representation (IR)")
     print("=" * 70)
@@ -744,22 +787,23 @@ def print_ir_model(ir_model: IRModel):
     print(f"\nChannels: {ir_model.channels}")
     
     print(f"\nProcesses ({len(ir_model.processes)}):")
-    for proc in ir_model.processes:
-        print(f"\n  Process:  {proc.name}")
-        print(f"    States: {proc.states}")
+    for proc in ir_model. processes:
+        print(f"\n  Process: {proc.name}")
+        print(f"    States:  {proc.states}")
         print(f"    Initial State: {proc.initial_state}")
         
         if proc.local_vars:
-            print(f"    Local Variables:  {proc.local_vars}")
+            print(f"    Local Variables: {proc.local_vars}")
         
         if proc.state_entry_assignments: 
             print(f"    State Entry Assignments:")
             for state, assigns in proc.state_entry_assignments.items():
-                assign_str = ", ". join(f"{k}={v}" for k, v in assigns. items())
+                assign_str = ", ". join(f"{k}={v}" for k, v in assigns.items())
                 print(f"      {state}:  {{{assign_str}}}")
         
         print(f"    Transitions ({len(proc.transitions)}):")
-        for t in proc.transitions:
+        for t in proc. transitions:
+            cond = analyze_transition(t)
             guard_str = f" [{t.guard}]" if t.guard else ""
             if t.is_timeout:
                 guard_str = " [timeout]"
@@ -769,14 +813,19 @@ def print_ir_model(ir_model: IRModel):
                 var_marker = " (var)" if a.is_variable else ""
                 if a.action_type == 'send':
                     actions_str.append(f"{a.channel}!  {a.message}{var_marker}")
-                elif a.action_type == 'receive':
-                    actions_str.append(f"{a. channel}?  {a.message}{var_marker}")
+                elif a.action_type == 'receive': 
+                    actions_str.append(f"{a.channel}?  {a.message}{var_marker}")
                 else:
                     actions_str.append("skip")
             
             actions = "; ".join(actions_str) if actions_str else "ε"
-            print(f"      {t.source} -> {t.target}{guard_str}:  [{actions}]")
-
+            markers = []
+            if cond.is_timeout:
+                markers. append("timeout")
+            if cond. is_unconditional:
+                markers. append("unconditional")
+            marker_str = f" ({', '.join(markers)})" if markers else ""
+            print(f"      {t.source} -> {t.target}{guard_str}:  [{actions}]{marker_str}")
 
 # ============================================================
 # 第六部分：命令行接口
