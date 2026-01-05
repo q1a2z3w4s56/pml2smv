@@ -1,0 +1,1074 @@
+
+第四章 SQL 与 NoSQL 语义分析与维护 
+ 问题描述 
+在上一章中，文章通过设计面向多源异构数据库的统一语法解析器，实现了解析语法的动
+态扩展。然而，语法解析仅实现了对语句的语法层面分析，无法判断语句是否真正有意义。
+因此在语法分析器生成 AST 后，下一阶段就是语义分析与验证。这一阶段负责检查 AST 的
+语义正确性，如表和列的存在性、数据类型的一致性、函数和表达式的有效性等，生成一个
+能够描述逻辑执行计划的语义模型。如果发现语义错误，则抛出语义错误异常，并生成报告。 
+然而传统的数据库语义分析方案已经无法满足复杂多变的业务需求：①传统的语义分析
+方案仅针对特定的数据库系统或 SQL 方言进行设计，缺乏跨数据库和跨平台的灵活性。当面
+对不同的数据库系统或新的 SQL 特性时，传统方案往往需要进行大量的修改和重构，不仅增
+加了开发成本，还降低了系统的可维护性；②此外，随着数据库技术发展，新的查询语法和
+特性层出不穷，传统语义分析方案往往难以适应这些变化，缺乏可扩展性；③传统的语义分
+析方案仅能进行简单的语法验证，而忽略了对查询语义的深入分析，可能导致一些语义上错
+误的查询被执行，从而引发数据错误或逻辑错误。 
+本章的语义分析方案采用模块化设计，使开发者能够以统一方式对 SQL 指令的语法语义
+信息进行处理，仅对特定业务进行扩展，降低重复开发成本。语义分析器能够将不同的 SQL
+方言标准化为统一的查询模型，简化了跨数据库查询的过程，并适应不断变化的数据库技术
+和新的 SQL 特性。 
+需要补充说明的是，如 MongoDB 和 Cassandra 等 NoSQL 数据库，使用更加灵活的数据
+模型，通常不需要复杂的关键数据采集步骤；并且在语法方面，NoSQL 规避了 SQL 查询严格
+的语法规则，采用更简单、更灵活的指令形式。这意味着它们不需要像 RDB 那样进行严格的
+模式匹配和语义验证，仅需要进行一定形式的数据验证，保证数据的完整性和一致性。 
+ 结构化的统一中间表示设计 
+由于本系统涉及多种异构数据库，传统多对多转换模式工作量大且会产生大量重复工作，
+因此本章引入中间表示，作为不同阶段之间转换的桥梁。由于 Oracle、MySQL、DB2 等基于
+ANSI 标准扩充的 RDB 仍被广泛应用，本文采用以 ANSI SQL 标准语法为基础、引入多种语
+法方言的模式设计异构数据库的中间表示模型，使系统能够支持对不同数据源的适配以及对南京邮电大学硕士研究生学位论文 第四章 SQL 与 NoSQL 语义分析与维护 
+ 33 
+SQL 语法的扩展。该模式提供了一个统一的接口，使得开发者可以使用相同的方式来处理不
+同类型语法语义信息，降低了数据模型之间的开发和维护成本，并为满足特定业务需求提供
+了更强的灵活性。 
+4.2.1 中间表示模型总体设计 
+由于不同数据库系统的数据存储模型不同，在数据命名、数据类型、数据结构方面存在差
+异，需要设计不同语法模型之间的转换策略。如图 4.1(a)所示的传统多对多转换模式，两个异
+构数据库之间直接进行数据转换，转换效率高，但 n 个异构数据库节点的双向操作必须编写
+n*(n-1)个数据转换器。如果新增一个可迁移数据库类型，则需要新开发 2n 个转换器，导致开
+发维护成本高、扩展性差。 
+ 
+(a) 多对多转换模式 (b) 中介转换模式 
+图 4.1 语法转换模式 
+本文采取图 4.1(b)所示中介转换模式，即通过设计一种中间模型，为所有的数据库指令提
+供统一的元数据描述格式，并通过转换器实现从源库数据转换为中间模型、再由中间模型转
+换为目标库数据的间接转换模式。该方案仅需编写 2n 种转换器，当增加、修改一个数据库存
+储模型时，只需编写新数据库模型与通用模型的语法转换器，其它同步节点的数据转换模块
+保持不变。该模式屏蔽了底层数据库之间的差异，极大地降低了开发难度，并考虑了一定的
+扩展性。 
+中间表示使用统一方式对异构数据库的语法进行格式化、标准化、简易化的语义描述。系
+统使用 Entity（实体）描述 SQL/NoSQL 语法的基本属性和参数，各语法块可用若干 Entity 实
+体组合描述，每个实体的统一形式化描述为： 
+Entity = <DBType, Field, Value, Relation> 
+其中 DBType 为数据库类型，表示实体语法的所属数据库类型；Field 表示实体所属的元
+素集合，所属元素可以是同类或子类实体；Value 以表达式形式存储 Entity 的数据或参数；实
+体关系 Relation∈(Entity×Entity)用于描述实体间的语义关联，包括实体条件表达式或存储的关
+系数据。本文将语义实体划分为 expression 和 statement，以更好地组织和管理语法规则，使南京邮电大学硕士研究生学位论文 第四章 SQL 与 NoSQL 语义分析与维护 
+ 34 
+得分析器的设计和实现更加清晰和易于管理。 
+ ∀ e(e ∈ Expr ∪ Stmt) → e ∈ entity (4.1) 
+4.2.2 Expression 实体设计 
+Expression 包含 SQL/NoSQL 语法中的筛选条件、表达式、字段、常量等元素，也包含 SQL
+中很多（如子查询、联接、聚合函数等）既包含语句成分也包含表达式成分的元素，是数据
+库执行过程中的重要参数。对 SQL/NoSQL 语法的语义分析，其主要工作在于对 Expression 部
+分内容进行元数据提取与校验，因此将 Expression 中间表示的设计独立划分出来。Expression
+语义实体以 SQL 语法描述为中心，而后逐步引入 NoSQL 的表达式语义的支持和转换，因此
+本节以 SQL Expression 语法为基础讲述。 
+在 SQL 语法中，Expression 实体按照使用场景和表示内容，可以分为：compdExpr
+（compound expression,复合条件式）、valueExpr（value expression,常量）、idExpr（identifier 
+expression,标识符）等类型，便于语义分析器分情况验证。 
+ Expr = compdExpr ∪ valueExpr ∪ idExpr (4.2) 
+（1）复合表达式 
+compdExpr 实体由多个子表达式通过运算符组合的多元表达式集合，根据在编译器中的
+执行优先级，可划分为逻辑表达式、关系表达式、计算式或子查询（如 exists、in 子句）等内
+容。compdExpr 的语义结构化描述如下： 
+compdExpr = {〈exprs, opc
+, priority〉| exprs = {expr1, expr2, ⋯ expri
+} ⋀ expri ∈ Expr 
+⋀ opc ∈ BOP ⋀ priority > 0 } 
+(4.3) 
+在这个定义中，exprs 是一个 list，包含组成复合表达式的子表达式{expr1, expr2, ..., expri}
+（i>=2）；BOP（Binary Operator）是复合表达式中的运算符集合，包含逻辑运算符（如
+AND/OR/NOT）、关系运算符（如>，<，=，!=）、算术运算符（如+-*/）等，也包含 BETWEEN、
+EXISTS、IN 等关键字；priority 是一个正整数，用于描述该复合表达式在 SQL 编译器中的优
+先级，决定了表达式求值的顺序。由 3.3.1 可知，compdExpr 在 SQL 中根据过滤、计算或转
+换等作用，存在语义规则： 
+∀expr ∈ compdExpr → expr ∈ (logicExpr ∪ booleanExpr ∪ relExpr) 
+⋁ expr ∈ (calcExpr ∪ funcExpr) 
+(4.4) 
+即对于任意 compdExpr 类型的 expr，要么是 logicExpr（逻辑表达式）、relExpr（关系比
+较式）或其他负责条件过滤的 booleanExpr（条件式），要么是负责计算、转换的 calcExpr（计南京邮电大学硕士研究生学位论文 第四章 SQL 与 NoSQL 语义分析与维护 
+ 35 
+算式）或 funcExpr（函数式）。对于 expr 具体的表达式类型，可根据 opc 判断。为了快速有
+效识别复合条件式的在编译器的解析优先级，可以用 Enum<operator,prior>的形式枚举所有
+SQL 多元运算符，代码片段如下： 
+public enum BinaryOperatorType{ 
+Multiply("*", 60), Divide("/", 60), Add("+", 70), Subtract("-", 70), 
+ 
+ GreaterThan(">", 110), GreaterThanOrEqual(">=", 110), LessThan("<", 110), 
+ LessThanOrEqual("<=", 110), LessThanOrGreater("<>", 110), 
+Like("LIKE", 110), Exists("EXISTS", 110), In("IN", 110), 
+ 
+ BooleanAnd("AND", 140), BooleanOr("OR", 160) 
+} 
+通过以上对语义实体的定义，compdExpr 满足了以下特性： 
+①以统一、可复用的数据结构描述表达式内容，将抽象语法树结构映射转换为中间表示格
+式，简化语义验证、语法转换、性能优化等操作，提升语义分析效率； 
+②能够有效区分识别逻辑式、关系式、计算式和其他筛选业务，避免语义分析和转换过程
+中产生歧义； 
+③对于逻辑关系式、计算式等对应的树形结构，能够快速判定执行优先级，并提供优先级
+的动态调整树形结构的方法，以根据元数据实现性能优化的目的。 
+（2）常量表达式 
+valueExpr 表示一元数值的表达式集合，用于描述如数字、字符串、日期或时间等 Literal
+内容，也被称作字面量，不需要引用任何变量、列或其他数据库对象。valueExpr 实体的语义
+描述如下： 
+ valueExpr = {< value, datatype, opv > | datatype ∈ DTs
+ ⋀ opv ∈ UOP} (4.5) 
+其中，DTs 是源数据库的数据类型集合，如 Integer、Double、Char、Date 等，通过
+getTypeByDB(ve.DBType)获取源数据库支持的所有 DataType 类型；UOP（Unary Operator）为
+一元运算符集合，一元运算符只对一个数值表达式执行操作，如一元+、一元-或其他前缀修
+饰符。 
+对 valueExpr 的语义分析主要涉及到对 literal 在 SQL 语句中的具体使用、其数据类型和
+值的理解，以及对查询的执行和结果的影响。因此本文针对 valueExpr 的定义，实现以下函数： 南京邮电大学硕士研究生学位论文 第四章 SQL 与 NoSQL 语义分析与维护 
+ 36 
+1)getValue(ve)/getDataType(ve)：分别获取 ve 的具体数值和数据类型。考虑 Integer、Double、
+Char、Date 等数据的在 RDB 和 Java 平台存储差异与存取效率，本文设计 SqlLiteral 接口，设
+计多个子类存取具体的数值，并选取合适的 Java 数据类型记录参数。部分子类的类名、对应
+SQL 数据类型、数值含义和 Java 存储类型如表 4.1 所示。 
+表 4.1 SqlLiteralExpr 部分子类详实 
+类名 SQL 数据类型 含义 Java 存储类型 
+SqlNullExpr null 
+空字段，代表数据内容为
+null 
+/ 
+SqlBooleanExpr number(1),bit 
+布尔类型，取值为 TRUE
+和 FALSE 
+Boolean 
+SqlIntegerExpr 
+ tinyint/ smallint/ integer/ 
+bigint 
+精确数值类型，如 0，-
+1，135 
+Byte/Integer/Long 
+SqlDecimalExpr numeric/ real/ float/ double 
+浮点类型，如 2.74e-6，
+3.14 
+Float/Double 
+SqlDateExpr date 
+日期类型，如 1997-11-
+10 
+Java.sql.Date 
+SqlTimeExpr time 时间类型，如 12:00:20 Java.sql.Time 
+SqlDateTimeExpr datetime,timestamp 
+时间日期类型，如 2012-
+12-21 14:46:32 
+Java.sql.DateTime 
+SqlCharExpr 
+char/ nchar/ varchar/ 
+varchar2/ nvarchar 
+字符常量，如‘hello 
+world!’ 
+Java.lang.String 
+2)isInRange(ve)：根据 ve.type 评估其表示范围和限制，并判断 ve.value 是否满足范围限
+制。 
+3)constFolding(ve1, op , ve2)：负责对由多个 literal 组成的的 calcExpr（⊆compdExpr）进行
+常量折叠，如四则运算、字符串拼接、简单函数运算等，即在转换优化阶段前对 literal 与其他
+常量表达式进行预计算，生成计算结果对应的 valueExpr，并替换对应的 compdExpr。 
+4)getResultType(ve1, op , ve2)：负责分析 calcExpr 对应计算结果的数据类型。需要考虑计
+算中是否发生隐式类型转换，当 literal 的数据类型与它所操作的列或表达式的数据类型不匹
+配时，可能发生隐式转换，如表达式’ab’+123 的结果为’ab123’，数据类型为 CHAR。此外还
+需考虑 NULL 值的影响。 
+（3）对象标识表达式 
+idExpr 是标识数据库对象的表达式集合，主要包含表（tables）、列（columns）、索引（indexes）、
+视图（views）等 identifier（标识符）。这些标识符在 SQL 语句中扮演着关键的角色，用于指
+定查询或操作的对象。 
+idExpr = {< name, alias, parent, objType > | parent ∈ idExpr ⋀ objType ∈ OTs
+} (4.6) 
+其中，OTs（Object Type）是源数据库的对象类型集合，包括 table、column、index 等类南京邮电大学硕士研究生学位论文 第四章 SQL 与 NoSQL 语义分析与维护 
+ 37 
+型，通过 getObjectsType(ve.DBType)获取源数据库支持的所有 Object 类型；parent 代表 idExpr
+的上级对象，用于表示 schema 与 table、table 与 column 等 Relation 关联；name 与 alias 分别
+代表 idExpr 的对象名与别名，若 alias 未定义，则可为 null 值。 
+identifier 在 SQL 语句中扮演着关键的角色，用于指定查询或操作的对象。为分析 SQL 的
+identifier 的语义，实现以下函数： 
+1)isTabExists(tId)/isColExists(cId)：分别判断 idExpr 对应的 table 或 column 是否存在或有
+效，以及是否具有正确的数据类型和约束。 
+2)isObjLegal(ide)：用于检查 ide.name 是否符合 ide.dbType 的命名规则。由于 Identifier 标
+识符的存在大小写敏感性的规则，如 MySQL 的标识符默认是大小写不敏感的，而 PostgreSQL
+和 Oracle 默认大小写敏感，因此需要注意数据库系统对大小写敏感性的规则；此外，不同数
+据库系统的命名长度、明明符号规则也存在差异。 
+3)isLink(ide1,ide2)：用于判断 ide1 与 ide2 之间是否存在关联。例如，在 JOIN 操作中，需
+要确认连接的表之间的列具有匹配的数据类型和含义。 
+4.2.3 SQL 语法实体设计 
+针对语法解析器的顶层语法规则，需要设计对应的 Stmt 实体，以结构化的方式描述 SQL
+查询语法的“骨架”。在 SQL 语义分析的过程中，系统通过构建器从每个语法类型中剥离具
+体参数和条件式，获得查询语句对应的 StmtS 实体，以专注于 SQL 结构的转换，帮助开发人
+员采用统一、精简的转换策略，维护语法和语义的正确性。 
+为了更加细粒度地描述 StmtS 实体的语义信息，需要首先将待分析的语句内部属性抽象出
+来，建立相应的语义模型。本节以简单 SELECT 为例，在标准 SQL 语句中，对应的 SQL 查
+询块（query block）实体可以表示为一个五元组： 
+QB =< SL, FC, WC, GB, OB > (4.7) 
+其中，WC 实体对应 where 子句，表示逻辑的、可嵌套的复合表达式，根据 4.2.2 节工作，
+可表示为： 
+WC ∈ compdExpr (4.8) 
+具体的，QB 其他内部属性包括： 
+（1）SL 实体：对应 SELECT 查询中描述查询结果集中应包含的列或表达式集合，其结构化
+描述为： 
+SL = {colExpr1, colExpr2, ⋯ colExprn} (4.9) 南京邮电大学硕士研究生学位论文 第四章 SQL 与 NoSQL 语义分析与维护 
+ 38 
+其中 selectList 是一个由 colExpri 组成的列表，每个 colExpr 实体可以是一个 idExpr 或
+funcExpr，包括列名、常量、函数等元素。即： 
+∀ i ∈ [1, n], colExpri ∈ (idExpr ∪ funcExpr) (4.10) 
+（2）FC 实体：对应 from 子句，既可以由单个引用表实体组成，也可以由多个引用表实体通
+过各种形式的连接(Join)构成： 
+FC = {< tableSourceL, joinType,tableSourceR, condition > |conditon ∈ compdExpr 
+ ⋀ tableSourceL,tableSourceR ∈ Entity ⋀ joinType ∈ {SQL 连接类型集合} } 
+(4.11) 
+其中，tableSourceL 和 tableSourceR 实体用于描述引用表，即参与数据查询的关系表结构；
+condition 属于 compdExpr 元素，用于描述可嵌套的连接条件，需要通过 isFilterExpr(expr)函数
+判断筛选条件是否合法；joinType 是 SQL 支持的连接类型集合，包括 INNER_JOIN、
+LEFT_JOIN、RIGHT_JOIN、FULL_JOIN 等 Join 连接操作。 
+（3）GB 实体：对应标准 SQL 语法中的 groupBy 子句，描述结果集的分组信息。描述内容如
+下： 
+GB = {< cols, having, optiongb > |cols = {colExpr1, colExpr2, ⋯ colExprn} ⋀ 
+having ∈ compdExpr ⋀ optiongb ∈ Entity} 
+(4.12) 
+其中 cols 是一个由 colExpri(1 ≤ i ≤ n) ∈ (idExpr ∪ funcExpr) 组成的列表，描述分组操作
+指定的列或表达式的值；having 实体描述可嵌套的复合逻辑条件，其结构与 where 子句近似；
+optiongb 表示其他 groupBy 子句属性的集合，如 WITH_ROLLUP，因源数据库的类型而异。 
+（4）OB 实体：对应标准 SQL 语法中的 orderBy 子句，描述结果集的排序信息。描述内容如
+下： 
+OB = {< cols, order, optionob > | cols = {colExpr1, colExpr2, ⋯ colExprn} ⋀ 
+order ∈ {ASC,DESC} ⋀ optionob ∈ Entity} 
+(4.13) 
+其中 cols 是 ORDER BY 句中指定的、确定排序方案的列或表达式的集合，结构与 GB.cols
+相似；order 是描述排序方向的集合，有“ASC”和“DESC”两种；optionob 表示其他 orderBy
+属性的集合，如 SIBLINGS、NULLS_FIRST 等。 
+4.2.4 NoSQL 语法实体设计 
+前文主要面向关系型数据库的中间表示设计，其中心在于以层次化的形式存储 SQL 语句
+的元数据，方便提取与分析。NoSQL 数据库不需要像 SQL 数据库那样进行严格的语义分析南京邮电大学硕士研究生学位论文 第四章 SQL 与 NoSQL 语义分析与维护 
+ 39 
+验证，但仍需要进行一定的数据验证，如数据类型是否匹配，以确保数据的完整性和查询的
+有效性。 
+（1）Redis 语法实体设计 
+KV 数据库是最简单的 NoSQL 数据库结构，其数据存储结构相对简单，数据以 key-value
+的形式操作并存储在数据库中。以 Redis 为例，其键是字符串形式，其主体业务可以看做高效
+的 HashMap 集合。基于数据类型的不同，对 value 的存储、读取、修改等操作的命令可能不
+同，但其基本思想近似 Java 的 HashMap 读写操作。因此，Redis 的语义模型Stmtkv(⊆ Stmt)，
+可以简要描述为： 
+Stmtkv = {< op, datatype, fields > | op ∈ OPkv ⋀ datatype ∈ DTkv} (4.14) 
+其中，OPkv 表示 Redis 对键值对的 CURD 操作类型集合，包括获取、设置、删除等操作
+类型，基本内容为： 
+OPkv = {GET, MGET,SET, MSET, EXISTS,DEL} (4.15) 
+DTkv 表示 Redis 支持的数据类型集合，通过与 OPkv 元素结合，共同描述更具体的 Redis
+操作命令。实体描述 Stmtkv 的存取数据类型如下： 
+DTkv = {STR,HASH, LIST,SET, ZSET} (4.16) 
+fields 表示一个或多个<key, value>组成的列表，用于描述 Redis 命令中具体的读写参数，
+其定义为： 
+fields = {field1, field2, . . . fieldn},且∀i ∈ [1, n], fieldi ∈ fieldkv 
+(4.17) 
+fieldkv = {< key, value > | key ���� ������������ ⋀ value ∈ valueExprkv} (4.18) 
+上述语义描述，对于部分指令 value 可缺省，如 GET、EXISTS 等；而 valueExprkv 实体用
+于描述 Redis 语句中的数值表达式的集合，包含于 valueExpr 集合，用于表示 Redis 指令操作
+的字符串（strings）、哈希（hashes）、列表（lists）、集合（sets）、有序集合（sorted sets）
+等信息。即： 
+∀ve, ve ∈ (strExprkv ∩ hashExprkv ∩ listExprkv ∩ setExprkv(isSorted)) 
+→ ve ∈ valueExprkv 
+(4.19) 
+通过以上实体定义，本节基本构建了 Redis 操作指令的语义模型。由于 Redis 注重快速、
+准确地对键值对进行读写操作，无需 SQL 一样复杂的语义验证工作，因此对于 Redis 语义实
+体的分析，重点在于对 valueExprkv 的数据一致性、完整性的验证。 
+（2）MongoDB 语法实体设计 
+作为是一个介于关系数据库和非关系数据库之间的产品，MongoDB 是最常用的文档型数南京邮电大学硕士研究生学位论文 第四章 SQL 与 NoSQL 语义分析与维护 
+ 40 
+据库，功能丰富，语法模型近似接近 RDB。因此对于 MongoDB 语法的语义描述模型，其结
+构与 StmtS 近似，而无需设置 StmtS 一样严格的语义限制规则。MongoDB 命令实体可表示为
+一个三元组，具体定义为： 
+StmtM = {< opn, coll, attrs > |opn ⊆ OPNM ⋀ isCollExists(coll) ⋀ attrs ⊆ EntityM} (4.20) 
+OPNM 是 MongoDB 的 operation 集合，包括 insertOne/insertMany、find、aggregate、
+updateOne/updateMany 等操作类型，对应 SQL 的插入、查找、聚合、更新等操作；coll 代表
+collection（集合）集合，通过 isCollExists()判断是否存在于 document 中；attrs 则是 StmtM(opn)
+的内部属性集合，如筛选条件、排序方向、投影等。 
+MongoDB 的 CURD 操作都是以 BSON 格式文档进行的，操作数据以 document（文档）
+为单位。document 由若干个可嵌套的 Pair（字段-值）对组成，可作为 MongoDB 操作参数
+document 实体对应的语义实体描述如下： 
+DOCM = {Pair1, Pair2, ⋯ Pairn},且∀ i ∈ [1, n], Pairi ∈ PairM (4.21) 
+PairM = {< field, value > |(field ∈ idExpr ⋁ field ∈ OPM) ⋀ value ∈ valueExprM} (4.22) 
+DOCM实体可看做若干个键值对实体（PairM）的组合。一个 PairM 实体的 field（键）可以
+是 MongoDB 的对象标识，也可以是 OPM 集合的操作符，如’$max’、’$group’、’$eq’。而 value
+（字段值）可以表示 BSON 支持的字符串、数值、布尔值、NULL 值等数据类型，也包括如
+其他文档、数组和文档数组等嵌入式数据结构。其语义实体valueExprM的定义如下： 
+valueExprM = valueExpr ∪ nestExprM (4.23) 
+nestExprM = DOCM ∪ arrExprM (4.24) 
+上述定义对 MongoDB 文档的 CRUD 操作进行一种简化的、概念性的描述，基本概括了
+MongoDB 中的文档编辑和较复杂查询操作。 
+ 元数据绑定和语义分析 
+语义分析与元数据之间存在密切的关联。语义分析是 SQL 编译过程中的一个重要阶段，
+它负责解析 SQL 查询的语法结构，并理解其背后的含义；而“元数据”是关于数据的数据，在
+数据库管理中起着至关重要的作用，用于描述了数据库的数据字典信息、统计信息、动态性
+能视图和分区、审计日志等其他扩展信息。本文提到的“元数据”主要指数据库的数据字典信
+息数据库的结构、对象、属性以及它们之间的关系等信息。 
+语义是指在特定上下文中，符号所表达的含义。语义分析阶段，主要负责收集抽象语法树南京邮电大学硕士研究生学位论文 第四章 SQL 与 NoSQL 语义分析与维护 
+ 41 
+标识符的属性信息并与节点绑定。SQL 语义分析的内容包括查询的字段名是否存在歧义、和
+聚合语句是否正确等等。在本章节中，语义分析器(Semantic Analyzer)的执行步骤如下： 
+（1）AST 分析：Analyzer 获取 Parser 返回的抽象语法树（AST），根据具体语句类型加
+载相应语句访问器和解析器； 
+（2）元数据绑定：Analyzer 调用访问器组件，按 DFS 顺序遍历 AST，并提取相关的元数
+据信息； 
+（3）语义分析：访问和存储完毕，Analyzer 调用存储、绑定后的元数据，分析、验证 Medata
+存储信息是否合法； 
+（4）中间表示生成：语义分析完成后，若语义验证通过，Analyzer 会将 AST 转换为逻辑
+计划。逻辑计划是一系列逻辑操作符的集合，描述了查询的逻辑结构，便于重写和转换。 如
+果在验证过程中发现任何错误（如表不存在、列不存在等），抛出相应的语义错误异常，要
+求客户或开发者改进相关语句。 
+4.3.1 元数据提取 
+元数据提取和存储工作发生在 AST 分析阶段，由 Visitor 访问器封装在相应的 ASTNode
+实体中，根据预先编写的方法策略，在语义验证、重写转换、性能优化等阶段调用分析。在
+语义分析时，主要考虑因素包括：表和列的存在性、数据类型的一致性、约束完整性等。 
+在前文提到过，create table 建表语句的元数据记录是语义验证工作的前提，因为无论其他
+DDL 或 DML 操作，所需要的表名、列名、列类型等信息都需要在 create table 语句中记录，
+成为全局信息。在本开发工作中，定义 RelTableDescription 描述描述表的元数据，包含了表的
+名称、拥有的列、列的数据类型以及其他相关的属性，在 create table 语句对应的 AST 分析后
+生成，在 alter table 的 AST 分析中修改。RelTableDescription 定义如下： 
+public class RelTableDescription{ 
+private String schemaName; 
+private String tableName; 
+private String tableAlias; 
+private Map<String, SqlColumnDefinition> columns; 
+private Map<String, TableRelation> relations; 
+//...... 
+} 南京邮电大学硕士研究生学位论文 第四章 SQL 与 NoSQL 语义分析与维护 
+ 42 
+语义分析器通过 RelTableDescription 获取表的元数据信息和列的元数据信息，以便进行后
+续的查询处理或数据操作。常用方法有： 
+·getSchemaName(): 获取表所在的 schema 名称。 
+·getTableName(): 获取表的名称。 
+·getColumns(): 获取表的所有列信息，返回一个 List<SqlColumnDefinition>。 
+·getTableRelations(): 获取与其他表的关联信息，如外键连接。 
+·getColType(String columnName): 根据列名，获取列的数据类型。 
+为了方便元数据的全局调用，本文进一步设计 SchemaField 类，以 schema 为单位记录迁
+移业务中，源数据库定义的表、视图等数据库对象的命名空间，在语义分析器内部创建，并
+在所有 DDL 和 DML 语句分析时引用。 
+public class SchemaField{ 
+private String schemaName; 
+private Map<String, RelTableDescription> tableMap; 
+// 注册:记录 create table 定义的表结构 
+public boolean register(RelTableDescription table){ 
+boolean flag=tableMap.contains(table.getName()); 
+if(!flag) tableMap.put(table.getName(), table); 
+return !flag; 
+} 
+//…… 
+} 
+其中，schemaName 为此命名空间的名称，tableMap 记录此 shcema 所有 table 的元数据，
+并提供方法注册、查找或移除信息。为了 TableDescription 内部信息安全，SchemaField 不直
+接返回 TableDescription 数据，而是通过 SchemaField 提供接口，验证或修改信息。SchemaField
+提供部分接口如下： 
+·register(RelTableDescription table): 添加一个新的表或视图到 Schema 中。 
+·remove(String tableName): 根据从 Schema 中移除一个表或视图。 
+·containsTable(String tableName): 根据表名或表别名判断是否存在 Table 对象。 
+·containsColumn(String tableName, String columnName):根据表名和列名判断是否存在
+Column 对象。 南京邮电大学硕士研究生学位论文 第四章 SQL 与 NoSQL 语义分析与维护 
+ 43 
+·getTableColumns(String tableName):根据表名或表别名获取内部所有 Column 元数据。 
+·getProcedure(String name): 根据过程名获取 Procedure 对象。 
+4.3.2 AST 分析 
+ANTLR 提供 Visitor（访问器）和 Listener（监听器）两种模式。语义分析以 visitor 模式
+遍历 Unresolved AST，提取元数据和会话信息实现。Visitor 访问器模式允许开发者定义一组
+操作，这些操作可以在语法树的各个节点上执行，主要任务是绑定元数据，通过显式的方法
+调用来获取子节点信息，最终将 AST 转换为可分析的中间表示实体。递归算法如下： 
+算法 4.1：AST 访问分析 
+输入：抽象语法树节点 ASTNode 
+输出：中间表示实体 Entitys 
+1 function visitASTNode(ASTNode) 
+2 IF ASTNode IS StmtContext THEN 
+3 StmtEntity←parseStatement(ASTNode) 
+4 FOR node IN ASTNode.getChildren() DO 
+5 ClauseEntity←visitASTNode(node) 
+6 StmtENtity.setProperty(ClauseEntity) 
+7 END FOR 
+8 RETURN StmtEntity 
+9 ELSE IF ASTNode IS ClauseContext THEN 
+10 ClauseEntity←parseClause(ASTNode) 
+11 For node IN ASTNode.getChildren() DO 
+12 ExprEntity←visitASTNode(node) 
+13 ClauseEntity.setArgument(ExprEntity) 
+14 END FOR 
+15 RETURN ClauseEntity 
+16 ELSE IF ASTNode IS ExprContext THEN 
+17 RETURN parseExpression(ASTNode) 
+18 END ID 南京邮电大学硕士研究生学位论文 第四章 SQL 与 NoSQL 语义分析与维护 
+ 44 
+19 END function 
+AST 访问器开发和调用的大致实现步骤如下： 
+（1）定义 Visitor 访问器接口。这个接口包含一系列的方法，每个方法对应语法树中的一
+种节点类型，命名为 visit<NodeType>，其中 <NodeType> 是语法树中节点类型的名称。 
+（2）实现 Visitor 访问器方法。为每个 visit(ParseTree tree)提供具体的逻辑，在访问相应
+类型的节点时执行。调用 visit<NodeType>(ParserRuleContext ctx)规则方法并获取返回值。
+visit<NodeType>(ParserRuleContext ctx)通过传递代表当前节点 ParserRuleContext 上下文参数
+来访问语法分析树，对 ASTNode 的元数据缓存和一部分分析工作在此方法中实现。 
+（3）生成遍历器。遍历器对象负责遍历语法树，并在每个节点上调用相应的访问者方法。
+对 于 存 在 多 个 子 节 点 ， 直 接 使 用 父 类 继 承 的 visit<NodeType> 方 法 ， 调 用
+visitChildren(ParserRuleContext ctx)，遍历子节点并整合子节点信息并返回。 
+（4）使用 Visitor 访问器：创建一个访问者对象，并将其传递给遍历器。遍历器将遍历语
+法树，并在每个节点上调用访问者的相应方法。实现访问器遍历生成转换成中间表示模型，
+作为语义分析器的返回结果。 
+使用 Visitor 访问器模式的优势在于，它允许在不修改语法树或解析器的情况下，为语法
+树添加新的操作，且具有良好的可扩展性和灵活性。针对 SQL 的多样性，本章节基于“高内
+聚低耦合”的设计理念，将 Visitor 划分成多个子模块，每个模块负责一个较为复杂的语法规
+则的元数据存储与绑定。 
+以查询请求“SELECT * FROM people WHERE status = "A" ORDER BY user_id DESC”为
+例，划分 SQL 各语法块并分析可知：查询实体为 people 表，以 status = "A"为筛选条件获取实
+体所有属性，并将结果集根据 user_id 列递减排序。算法 1 生成的中间表示对应的 JSON 格式
+化描述如下： 
+{ 
+ "type": "statement", "attribute": "simpleSelect", 
+"result": [ { "type": "selectItem", "attribute": "column", "value": "*" } ], 
+"from": { "type": "tableSources", "attribute": "table", "value": "people" }, 
+"where": [ { 
+"type": "condition", "format": "binary", "operator": "=", 
+"left": { 
+"type": "expression", "attribute": "column", "value": "status","link":"from"."value" 南京邮电大学硕士研究生学位论文 第四章 SQL 与 NoSQL 语义分析与维护 
+ 45 
+}, 
+"right": { 
+"type": "expression", "attribute": "literal", "value": "A", "link": "left"."value" 
+} 
+} ], 
+"order": [ { 
+"type": "orderBy", "attribute": "order", 
+"expression": { "type": "identifier", "attribute": "column", "value": "user_id" }, 
+"mode": "desc" 
+} ] 
+} 
+在语义分析与实体封装过程中，模块判断 people 表是否存在，以及是否存在 status、user_id
+等表属性、status 属性是否为 varchar 类型数据等。此外还会检查 user_id 是否为 people 表索
+引，若是，则在 Query 语义实体中标记其索引名为“user_id”以及对应的索引类型。 
+4.3.3 语义分析与验证 
+当 Visitor 完成 AST 分析和元数据绑定后，返回的 StmtS 实体即可描述查询的逻辑结构，
+并将表的列定义、分布式属性记录下来，下一步就是根据 SQL 类型调用相应的语义验证和语
+法转换策略。 
+列定义的合法性检查是在 Analyzer 类的 analyzeColumnDefs 方法中进行的。这个方法接收
+一个 CreateTable 语句的语义实体，并对每个列定义实体进行详细的检查。其合法性检查通常
+包括以下几个方面： 
+⚫ 数据类型检查：确保列的数据类型是系统支持的，并且符合语法规则。 
+⚫ 列名检查：确保列名符合标识符的命名规则，例如不包含非法字符、不是保留字等。 
+⚫ 唯一性检查：确保同一张表中没有重复的列名。 
+⚫ 其他约束检查：例如，如果列被定义为 NOT NULL，但没有默认值，那么可能需要检查
+是否允许这样的定义。 
+Analyzer 进行列定义的合法性检查，其简要算法如下： 
+ 南京邮电大学硕士研究生学位论文 第四章 SQL 与 NoSQL 语义分析与维护 
+ 46 
+算法 4.2：columnDefinition 语义分析 
+输入：createTable 语句实体 CTS，源数据库类型 DbDtypes 
+输出：语义分析验证结构 flag:Boolean 
+1 function analyzeColumnDefs(CTS, DbDtypes) 
+2 columnSet=CTS.getColumns() 
+3 columnNames = new Set() 
+4 FOREACH columnDef col∈columnSet: 
+5 IF NOT isValidIdentifier(col.name): //检查列名 
+6 RAISE SemanticError("Invalid column name: " + col.name) 
+7 IF NOT isSupportedDataType(col.dataType): //检查数据类型 
+8 RAISE SemanticError("Unsupported data type for column: " + columnDef.name) 
+9 IF columnNames.contains(columnDef.name): //检查列名唯一性 
+10 RAISE SemanticError("Duplicate column name: " + columnDef.name) 
+11 columnNames.add(col.name) 
+12 //... 这里可以添加对其他约束的检查 ... 
+13 END FOREACH 
+14 RETURN True 
+15 END function 
+这个算法获取 CTS 实体的所有列定义信息，并进行合法性检查。如果发现任何不合法的
+列定义，它会抛出一个 SemanticException 异常，指出问题的位置和原因。在更具体的语义分
+析业务中，Analyzer 会为每一类 SQL 语句编写语义验证方法的调度顺序，并包含更多的逻辑
+处理。 
+ 实验与结果分析 
+4.4.1 实验设计 
+本章的主要工作在于设计能够结构化描述 SQL 语义的中间表示模型，以及能够根据中间
+表示的元数据对 SQL 语句进行语义验证的语义分析器（semantic analyzer，以下简称
+“SemAnalyzer”）。对于未能通过语义验证的语句，语义分析器会抛出异常，并说明错误类南京邮电大学硕士研究生学位论文 第四章 SQL 与 NoSQL 语义分析与维护 
+ 47 
+型。本文通过 SemanticErrorCode 类枚举语义分析器需要检验的“语义错误”，部分错误类型
+如表所示： 
+表 4.5 语义分析器的检验错误类型 
+语义错误类型 说明 
+INVALID_FUNCTION_ARGUMENT 函数接收到不合法或不支持的参数类型 
+INVALID_TABLE_REFERENCE 引用了一个不存在的表或视图 
+INVALID_COLUMN_REFERENCE 引用了一个不存在的列 
+AMBIGUOUS_COLUMN_REFERENCE 查询中的列引用对于多个表都是有效 
+TYPE_MISMATCH 表达式的数据类型与预期类型不匹配 
+UNSUPPORTED_OPERATION 数据库不支持的函数或操作 
+本节实验的主要目的是检验SemAnalyzer在解析SQL命令时的完整性、准确性以及性能。
+为有效评估 SemAnalyzer 的语义分析与验证功能的功能完整性、准确性，本次实验以 TPC-H
+基准集作为业务环境，并基于表 4.5 列举的语义错误创建或修改相应的 SQL 语句，生成 62 个
+测试样例，覆盖常见的语义错误类型，以进行准确性测试和性能。测试样例分为以下类型： 
+⚫ 能正确进行语义分析并转换成中间表示的 SQL 语句。 
+⚫ 含有基本语义错误的 SQL 语句。涉及函数调用、参数管理、聚合操作、列名和数据类型
+等方面。 
+⚫ 复杂查询语句中的语义错误，如多表连接、嵌套查询等。 
+⚫ 边界情况，如超长查询嵌套、对象名过长、溢出参数、特殊数据类型等。 
+为进一步评估 SemAnalyzer 语义分析验证性能，本文引入 Calcite，将 SemAnalyzer 与
+Calcite 的 validate 模块进行对比。Calcite 是一个流行的开源框架，专门用于构建数据库和流
+处理系统的 SQL 解析、优化和执行功能，其 validate 模块负责语义验证，确保 SQL 语句的语
+法和语义正确性。对 62 个 SQL 测试样例编号为 S1~S62，记录二者处理相同测试样例时的语
+义验证时间，并进行比较。 
+4.4.2 实验结果与分析 
+（1）语义验证准确性测试与结果分析 
+对于测试语句中能正确语义分析的 SQL 语句，对于其正确转换后的中间表示结构，应能
+通过 print 打印函数输出语句表示的 token 列表，并与词法解析器获取的 token 列表相一致，
+即能验证语义分析器的准确性。对于存在语义错误的测试用例，除了验证语义分析器是否能
+检测出错误外，还要检验报错信息的准确性和清晰度。部分测试结果如表 4.6 所示。 
+ 南京邮电大学硕士研究生学位论文 第四章 SQL 与 NoSQL 语义分析与维护 
+ 48 
+表 4.6 语义分析器准确性测试结果 
+测试语句 语义错误类型 语义分析 检验报告 
+CREATE TABLE biz.order ( 
+order_id BIGINT NOT NULL AUTO_INCREMENT, 
+store_id BIGINT NOT NULL, 
+ order_sn VARCHAR(255) NOT NULL, 
+ amount DECIMAL(10, 2) NOT NULL, 
+ order_date DATE NOT NULL, 
+ PRIMARY KEY (`id`) 
+); 
+None 
+(无语义错误) 
+正确 正确 
+SELECT name, COUNT(*) 
+ FROM users 
+ WHERE age > 25; 
+MUST_BE_AGGREGATE 
+_OR_GROUP_BY 
+(未对`name`列分组) 
+正确 正确 
+SELECT order_sn,order_type,order_date 
+FROM biz.order 
+WHERE order_date>=CURDATE() - INTERVAL 7 
+DAY; 
+MISSING_COLUMN 
+(`order`表无
+`order_type`属性) 
+正确 正确 
+SELECT SYSDATE FROM DUAL; 
+FUNCTION_NOT 
+_SUPPORTED 
+(当前数据库不支持
+`SYSDATE`获取当前日期) 
+正确 正确 
+SELECT store.store_name, 
+(SELECT SUM(amount) FROM order 
+WHERE order.store_id = store.id) 
+FROM store; 
+MULTIPLE_FIELDS 
+_FROM_SUBQUERY 
+(未设置别名，子查询返回
+多行数据) 
+正确 正确 
+SELECT * FROM users WHERE age = 260; 
+LITERAL_OVERLOW 
+(age 数据范围[0, 255]，
+260 溢出) 
+正确 正确 
+经过测试，语义分析器能否准确解析所有测试样例的语义正确性，并正确标记“错误类
+型”。经测试，本章设计的、用结构化于描述异构数据库语法的的中间表示能够有效维护 SQL
+语句中的元数据信息，并能够通过 SemAnalyzer 正确地验证结构中的语义。 
+（2）语义验证性能测试与结果分析 
+本节实验使用相同的测试集依次测试，记录 SemAnalyzer 和 Calcite-validate 模块在对
+S1~S62 时的语义分析验证所用的时间，以累加结果为衡量参数比较二者的语义分析性能。由
+于测试样例数量较少，为保证测试结果的稳定性，对于每句测试语句，SemAnalyzer 和 CalValidate
+都进行 5 次测试，取平均值记录。最终的测试结果绘制成图 4.2 所示的折线图。 南京邮电大学硕士研究生学位论文 第四章 SQL 与 NoSQL 语义分析与维护 
+ 49 
+ 
+图 4.2 语义分析与验证性能对比图 
+由测试结果可知，SemAnalyzer 在性能上较 Calcite-validate 语义验证模块有微弱优势。具
+体地，在相同测试集下 SemAnalyzer 较 Calcite-validate 快 9~33 微秒。这一方面是在二者访问
+模式相近的情况下，SemAnalyzer 以更简洁、高效的分析算法和数据结构进行语义分析；另一
+方面 Calcite 作为一个成熟的框架，在语义验证模块包含了许多优化和特性支持操作，一定程
+度影响了语义分析性能。总体而言，本章设计的基于本文中间表示结构的语义分析器具有很
+好的语义分析性能，且在解析性能上体现出一定的稳定性。由此可知，本章设计的中间表示
+结构，实现了语义维护的有效性和可扩展性，进而保障了语义分析器的鲁棒性、准确性。 
+ 本章小结 
+本章主要介绍了面向数据库结构及应用迁移的语义解析器开发流程。本章首先介绍了可
+扩展存储 SQL 元数据的中间表示结构的设计方案；然后，文章基于可扩展的中间表示模型，
+设计了具体的元数据存储和语义分析验证方案；最后，本章对语义分析器进行了功能测试和
+性能测试，实验证明了统一语义分析器异构数据库迁移环境时，能够准确、高效的对业务语
+义准确性、有效性和完整性进行评估。 南京邮电大学硕士研究生学位论文 第五章 异构数据库迁移中的重写转换 
+ 50 
+第五章 异构数据库迁移中的重写转换 
+ 问题描述 
+在数据库结构迁移业务中，不同数据库系统（如 MySQL、Oracle、SQL Server 等）底层
+原理、语法规范差异较大，在迁移过程中还需要将 SQL 方言重写为目标平台支持的形式。然
+而，传统 RDB 之间的 SQL 转换方法通常依赖于字符串替换和正则表达式匹配，准确率低，
+无法保证转换后的 SQL 逻辑，且映射模型扩展性差、难以维护；另一方面，在 RDB 向 NoSQL
+数据库迁移业务中，迁移前后环境在数据模型与结构差异、查询语言、扩展性等方面存在更
+大的差别，目前仍然缺乏高效、准确的迁移方案。因此，开发一套面向多源异构环境的、准
+确、高效的语法重写转换器，是本文数据库结构和迁移方法研究中又一个关键任务。 
+在上一章中，我们通过中间表示结构将 SQL 语句的语义信息从具体的语法细节中抽象出
+来，使其更易于处理和转换。通过这种方式，我们可以将 SQL 语句的解析和转换过程与具体
+的数据库方言解耦，使得整个系统更加灵活和可扩展。在本章，我们基于中间表示模型，编
+写了一系列 SQL 方言转换方法，设计开发出了语法重写转换器，实现在不同的数据库系统之
+间进行无缝的 SQL 语句迁移。 
+ 面向 SQL 方言转换的语法重写 
+在 RDB 之间的迁移业务中，语法重写器负责接收语义分析器生成的中间表示实体，并针
+对不同的源数据库和目标数据库，设计一套完善的语法重写转换规则。这些规则基于数据库
+之间的语法差异和特性兼容性预编写，能够自动识别并转换逻辑执行结构中的方言内容，以
+确保目标数据库的语法兼容性和功能完整性。 
+5.2.1 SQL 语法重写转换流程 
+由于不同的数据库系统支持不同的 SQL 方言或扩展，导致 SQL 语句在不同的数据库系统
+中存在差异。这些差异可能导致直接迁移的 SQL 语句在目标数据库中无法正确执行，从而影
+响数据库迁移的正确性和效率。 
+基于关系型数据库在语法上的相似性，语法重写器以对逻辑执行树的树形结构关系映射南京邮电大学硕士研究生学位论文 第五章 异构数据库迁移中的重写转换 
+ 51 
+为目标，将转换的重点放在实体（Entity）的语译信息分析和逻辑转换上，主要步骤包括： 
+（1）重写器以 DFS 顺序扫描逻辑执行树结构，识别方言或需要转换为方言的语法块； 
+（2）标记扫描位置，根据源数据库类型，加载方言转换策略； 
+（3）根据目标数据库类型，对相应 SQL 逻辑实体存储数据进行分析、转换，生成新的逻辑
+实体； 
+（4）将新的逻辑实体并入逻辑执行树的相应位置，然后继标记扫描点位置，继续遍历，直至
+转换完成。 
+针对步骤（1），本节基于第 4.2.3 节的标准 SQL 语义实体，进一步定义 ExtendNode 接口
+以扩展表示数据库方言语法，可以通过“node instanceof ExtendNode”快速判断 SQL 语义实体
+是否为方言。在语法重写器扫描语义实体描述的逻辑执行计划过程中，若扫描到方言实体，
+即可调用语法重写器转换方法或 ExtendNode 实现类内部转换，进行结构转换；若不是，需要
+根据目标数据库类型及语法块判断是否需要转换，判断方法在重写转换器统一实现。 
+5.2.2 关键字转换方法 
+不同的数据库系统可能使用不同的关键字来表示相同的操作。例如，要限制查询结果返回
+的行数时，MySQL 等数据库会使用`LIMIT`关键字，而 Oracle 提供 ROWNUM 伪列进行限制，
+SQL Server 则使用`FETCH FIRST`或`TOP`等关键字实现相似的功能。在 4.2 节中的中间表示
+模型设计中，我们编写了 SqlLimit 类，记录“限制查询结果返回的行数”子句的返回行数、偏
+移量等信息。如在 MySQL 或 PostgreSQL 中，想要在员工表（employees）查筛选 10 条员工
+信息，相应的 SQL 语句如下： 
+SELECT * FROM employees LIMIT 10, 20; -- 跳过前 10 行，返回接下来的 20 行 
+SELECT * FROM employees LIMIT 20; -- 返回最多 20 行结果 
+若要将业务语句迁移到 SQL Server 中，则 SQL 语句转换成 TOP 关键字或 OFFSET ... 
+ROWS ... FETCH NEXT ... ROWS ONLY 的句式，语句如下： 
+SELECT TOP 20 * FROM employees; -- 返回最多 20 行结果 
+SELECT * FROM employees ORDER BY id OFFSET 10 ROWS FETCH NEXT 10 ROWS ONLY; 
+-- 跳过前 10 行，返回接下来的 10 行 
+同理，当业务迁移到 Oracle 时，需要使用 rownum 进行分页查询，通过 rownum 虚列指定
+结果集的序列范围，实现“限制返回结果数”的效果。语句如下： 南京邮电大学硕士研究生学位论文 第五章 异构数据库迁移中的重写转换 
+ 52 
+SELECT * FROM employees WHERE ROWNUM>10 AND ROWNUM<20; -- 跳过前 10 行，
+返回接下来的 20 行 
+SELECT * FROM employees WHERE ROWNUM<=20; -- 返回最多 20 行结果 
+当语法重写器扫描到 SQLLimit 实体时，语法重写器根据目标库标记，判断 LIMIT 子句是
+否需要转换，判断逻辑为： 
+public class SQLTransformUtils{ 
+public static boolean checkSqlLimit(SqlLimit limit, DbType targetType){ 
+switch(targetType){ 
+case DbType.Oracle,DbType.SQLServer->return true; 
+//大部分关系型数据库无需转换 LIMIT 子句 
+default->return false; 
+} 
+} 
+//……其他辅助转换方法 
+} 
+若目标数据库为 Oracle、SQL Server 或其他不支持 LIMIT 关键字的平台，则重写器调用
+convertSqlLimit 方法实现转化。将 SqlLimit 实体进行结构转换的步骤如下： 
+public ExtendNode convertSqlLimit(SqlLimit limit, DbType targetType){ 
+ //首先，获取关键参数：结果集大小和偏移量 
+ SQLExpr count=limit.getRowCount(); 
+SQLExpr offset=limit.getOffset(); 
+//然后，根据目标平台，对参数进行处理 
+switch(targetType){ 
+//若需迁移至 SQL Server，使用 TOP 关键字 
+case DbType.SQLServer->{ 
+if(SQLExprUtils.isEmpty(offset)) 
+return new SqlServerTop(count); 
+} 
+//若需迁移至 Oracle，转换为 Rownum 序列 
+case DbType.Oracle->{ 南京邮电大学硕士研究生学位论文 第五章 异构数据库迁移中的重写转换 
+ 53 
+SQLExpr upper=null; 
+if(!SQLExprUtils.isEmpty(offset)) 
+upper=SQLExprUtils.ExprPlus(count,offset); 
+return new OracleRownumExpr(offset,upper); 
+} 
+default- > return null; 
+} 
+} 
+转换方法完成后，重写器获取相应的方言实体，对逻辑执行树结构进行插入、删除和结果
+转换等操作，完成子句转换。 
+5.2.3 数据类型转换方法 
+当进行跨数据库系统迁移过程中，数据类型不一致是一个常见问题，因此重写转换器需要
+检查目标库的数据类型兼容性，并相应地进行数据类型转换或映射。这是一个关键且复杂的
+环节，需要注意以下因素： 
+⚫ 精度和范围：在转换为数值类型时，需要确保目标类型能够涵盖源数据的精度和范围。
+MySQL 中的 TINYINT、SMALLINT、INT、BIGINT 等类型都可以表示数值内容，但表
+示范围不同。 
+⚫ 空值和默认值：在数据类型转换时，还需要考虑字段的空值和默认值问题。异构数据库对
+于空值和默认值的处理可能存在差异，因此在转换过程中需要确保这些属性得到正确的
+处理。 
+⚫ 长度限制：字符串类型的长度限制在不同数据库中可能有所不同。在转换时，需要确保目
+标字段的长度能够容纳源数据，避免数据截断或溢出。 
+表 5.1 不同数据库之间的数据类型差异 
+数据类型 MySQL Oracle SQL Server PostgreSQL 
+字符串 VARCHAR2 VARCHAR VARCHAR VARCHAR 
+整数 INT NUMBER INT INT 
+浮点数 FLOAT NUMBER FLOAT FLOAT 
+时间日期 DATETIME DATE DATETIME TIMESTAMP 
+布尔值 TINYINT NUMBER BIT BOOLEAN 
+如表 5.1 所示，Oracle 支持动态字符串类型为 `VARCHAR2`而其他数据库使用 
+`VARCHAR` 或 `CHARACTER VARYING` 可变长度的字符串。此外，Oracle 还支持南京邮电大学硕士研究生学位论文 第五章 异构数据库迁移中的重写转换 
+ 54 
+NUMBER(p,s)数值类型，这是一个几乎可以表示任何复杂的数值数据的强大类型，其中 p 表
+示 precision 精度（整数位数），而 s 表示 scale 标度（小数位数）。在转换到 MySQL 或
+PostgreSQL 时，需要使用相应的数据类型来保持相同的数值范围和精度。其部分转换代码如
+下： 
+def convert_numeric_type(self): 
+ if self.type_name.upper() == 'NUMBER': 
+ if self.arguments is None or len(self.arguments) == 0: 
+ # 无参数，映射为 DECIMAL 类型 
+ return SQLNumericType('NUMERIC') 
+ elif len(self.arguments) == 1: 
+ # Number(*) 形式，通常也映射为 Numeric 类型 
+ return SQLNumericType('NUMERIC') 
+ elif len(self.arguments) == 2: 
+ # Number(p,s) 形式 
+ precision, scale = self.arguments 
+ precision = int(precision) 
+ scale = int(scale) # 根据精度和刻度选择合适的 MySQL 类型 
+ if precision <= 3 and scale == 0: 
+ return SQLNumericType('TINYINT') 
+ elif precision <= 5 and scale == 0: 
+ return SQLNumericType('SMALLINT') 
+ elif precision <= 10 and scale == 0: 
+ return SQLNumericType('INT') 
+ elif precision <= 20: # 注意：这里假设没有超过 MySQL BIGINT 的精度 
+ return SQLNumericType('BIGINT') 
+ else: # 使用 DECIMAL 类型，并指定精度和刻度 
+ return SQLNumericType('NUMERIC', [precision,scale]) 
+ else: # 不支持的 Number 类型格式 
+ raise ValueError(f"Unsupported Number type format: {self.type_name}") 
+ else: # 其他类型，不进行转换或抛出异常 南京邮电大学硕士研究生学位论文 第五章 异构数据库迁移中的重写转换 
+ 55 
+ raise ValueError(f"Unsupported type: {self.type_name}") 
+如上述代码所示，SQL 语法转换需要将一部分数据类型转换为目标数据库所支持的数据
+类型，并根据容量（capacity）参数分支选取合适的数据类型；如果参数不在预期的范围内导
+致目标数据库无法支持的情况，那么数据类型转换模块就会抛出异常，这时就需要人工的修
+改源 SQL 方言的具体格式，实现相似效果。此外，代码片段没有处理所有的边界情况，例如
+当精度或刻度值过大时。在实际应用中需要在元数据记录表细化相关逻辑。 
+ 面向 SQL/NoSQL 迁移的模式转换 
+SQL 与 NoSQL 的部分对象映射关系如表 5.2 所示。在 RDB 中，关系表是数据库的基础
+单元，表与表之间存在多种关联关系，同时能通过约束保证数据的安全性和完整性；而 NoSQL
+数据库相较关系型数据库的一大改进在于，更加侧重对海量数据的高效率存储和访问的需求，
+为此引入了更多样灵活的数据模型，能够自动创建和调整数据存储结构。由于 RDB 和 NoSQL
+数据库在设计思想上的差异，NoSQL 不直接支持外键关联操作，因此在将 RDB 结构迁移到
+NoSQL 平台时，其存储模式的转换是一大难点。 
+表 5.2 SQL 与 NoSQL 对象关系映射 
+SQL 术语 MongoDB 术语 Graphql 术语 Redis 术语 解释说明 
+Database Database Schema Bucket 数据库/模式/桶 
+Table Collection Node Type Keyspace 关系表/集合/节点类型/键空间 
+Row Document Node Key/Value Pair 数据行/文档/节点/键值对 
+Column Field Element Entry 数据列/字段/节点属性/实体 
+Index Index Label Index Key 索引/标签/索引键 
+5.3.1 RDB 关系表结构转换 
+基于 RDB 和 NoSQL 在底层设计上的差异，相较于 RDB 之间的迁移，在实现 RDB 到
+NoSQL 的业务语法转换前，需要先进行源数据源的关系模型进行整体分析，以实现到非关系
+型模型的模式转换。迁移转换流程如图 5.1 所示：首先，需要详细分析关系型数据库的表结
+构、字段类型、关系等元数据，生成关系模型；然后根据元数据分析，进行模式转换，将关
+系模型映射转换为 NoSQL 存储模型，如将多个表合并为一个文档，或者将复杂关系简化为键
+值对等；最后，将语义实体的关键参数填入 NoSQL 语法模型，生成对应 NoSQL 语句。 南京邮电大学硕士研究生学位论文 第五章 异构数据库迁移中的重写转换 
+ 56 
+ 
+图 5.1 RDB 到 NoSQL 迁移转换原理 
+RDB 通过外键约束建立表与表之间的联系，保证关联完整性，在 NoSQL 中没有直接的等
+价概念。因此，本节采用有向图模型表示表之间的关系，根据 SchemaField 元数据表获取指定 RDB
+库中的外键关联信息，关联主表（被依赖表）对象、从表（含外键表）对象以及外键约束字段。然后，
+以 table 为有向图的节点，以外键约束为各节点间的有向边，按 DFS 遍历顺序添加图模型的
+连接边，最终构建成有向图模型。其伪代码如下： 
+算法 5.1： RDB 有向图模型构建 
+输入：SchemaField 元数据表 
+输出：RelGraph 表关联图结构 
+1 RelGraph graph=new RelGraph() 
+2 Foreach table tableNode∈schemaField.getTables() 
+3 graph.addNode(tableNode) //将关系表 t 作为节点添加到 Graph 节点列表中 
+4 Foreach foreignKey fk∈tableNode.foreignKeys // 检查当前 Table 是否有外键 
+5 table targetNode = graph.findNode(node => node.tableName == fk.targetTableName) 
+6 If targetNode==NULL:// 检查外键指向的目标表是否已经在 Graph 中 
+7 targetNode=schemaField.findTable(fk.targetTableName) //若不在 graph 中，从元数据表获取 
+8 graph.addNode(targetNode) 
+9 graph.addEdge(tableNode,targetNode,fk) //将外键关系作为有向边，添加到 Graph 的边列表 
+10 END 
+11 END 
+12 Return graph //返回构建好的表关联图 
+5.3.2 RDB 与文档型数据库的迁移转换 
+对于 RDB 到文档型数据库的转换迁移，本章节以 MongoDB 作为文档型数据库的代表进
+行探讨。由表 5.2 可知，关系型数据库的表、列、属性和数据对象分别与 NoSQL 数据库南京邮电大学硕士研究生学位论文 第五章 异构数据库迁移中的重写转换 
+ 57 
+MongoDB 的集合、文档、字段、值等数据结构一一对应。MongoDB 作为一个介于关系数据
+库和非关系数据库之间的产品，其语法几乎能实现类似 SQL 单表查询的绝大部分功能，即可
+以通过简单的一对一映射操作，实现 SQL 与 MongoDB 语法的转换，如表 5.3 所示。对于 RDB
+到文档数据库的迁移工作，其主要难点在于垂直扩展、形式固定的关系模型，与可水平扩展、
+灵活嵌套的 JSON/BSON 文档模型的底层差异。例如，SQL 使用 JOIN 关联来表示数据间的关
+系，而 MongoDB 通过文档的引用和内嵌处理数据之间的关系，没有显式的外键概念。 
+表 5.3 SQL 与 MongoDB 操作映射表 
+业务 SQL MongoDB 
+基础查
+询 
+SELECT * FROM users WHERE name 
+= 'John'; 
+db.users.find({ name: "John" }) 
+逻辑操
+作符 
+SELECT * FROM users WHERE name 
+= 'John' OR age < 25; 
+db.users.find({ $or: [{ name: "John" }, { age: 
+{ $lt: 25 } }] }) 
+排序 
+SELECT * FROM users ORDER BY 
+age DESC; 
+db.users.find().sort({ age: -1 }) 
+限制返
+回数量 
+SELECT * FROM users LIMIT 5; db.users.find().limit(5) 
+内嵌文档是指在一个文档中嵌套另一个文档。适用于关系表存在一对一或一对少的关系，
+表中数据需要同时被访问的情形。通过将数据保存在同一个文档中，可以简化查询操作，减
+少跨文档查询的复杂性，提高数据的一致性和完整性。其转换原理如图 5.2 所示。图中，表
+T1 的外键 T1.Tfk 与 T2 的 T2.C1 字段相关联，在转换为文档模型后，可以以 T1.Tfk 为文档
+名，将 T2 内容作为文档嵌入 T1 文档中。 
+ 
+图 5.2 关系模型转换为内嵌式文档模型 
+引用文档则是通过在主文档中存储一个指向另一个文档的 ID 字段来实现的。当关系表崔
+仔一对多或多对多的关系，其关联数据量往往较大，则使用引用文档可能更为合适。引用文
+档通过存储其他文档的标识符（如 ObjectId）来建立关系，允许独立地管理和更新被引用的数
+据，从而可以避免单个文档过大的问题，并且可以灵活地处理多个文档之间的关联。 
+因此，在实现 RDB 到 MongoDB 的迁移转换时，需要先基于 SchemaField 元数据表定位
+语句描述实体的引用主表 table，然后检索 table 在 Realtions 关联中是否存在一对一、一对一
+或多对多的联系，根据关联结构判断转换为“嵌入”或“引用”。流程如下： 
+ 南京邮电大学硕士研究生学位论文 第五章 异构数据库迁移中的重写转换 
+ 58 
+算法 5.2：从 RDB 到文档模型的模式转换 
+输入：RelGraph 表关联图结构和 SchemaField 元数据表 
+输出：mongoMetadata 元数据表 
+1 OneToOne [] ←从 RelGraph 提取一对一关系 
+2 OneToMany [] ←从 RelGraph 提取一对多关系 
+3 ManyToMany [] ←从 RelGraph 提取多对多关系 
+4 Foreach table t∈schemaField.getTables() // 获取元数据表中所有基础表 
+5 collection←{name: t.tableName, fields: []} 
+6 Foreach column col∈t.getColumns() 
+7 If col.isPrimaryKey: 
+8 Collection.addFiled({name: '_id', type: 'ObjectId'}) // MongoDB 使用_id 作为主键 
+9 Else: 
+10 Collection.addFiled({name: col.name, type: Mapping(col.type)}) 
+11 End 
+12 
+ // 检查关系并决定使用引用还是嵌入 
+If t∈{ManyToMany[], OneToMany[]} 
+13 
+ //使用引用 
+collection.addField({name: t.getPK().getName(), type: 'ObjectId', isArray: true}) 
+14 Elseif t∈{ManyToOne[], OneToOne[]} 
+15 pKeys[]←t.getPKs() //获取组合主键 
+16 
+// 使用嵌入 
+embeddedCollectionName = relation.referencedTable.name + 's' 
+17 collection.fields.append({name: embeddedCollectionName, type: 'array', embedded: true}) 
+18 // 进一步定义嵌入的文档结构 
+19 End 
+20 mongoMetadata←Emits(collection) //将文档存储在 mongoDB 结构中 
+21 End 
+总之，在选择使用内嵌还是引用时，需要根据具体的应用场景和需求进行权衡：如果数据
+关联紧密且经常一起查询，内嵌可能是一个更好的选择；如果数据需要独立管理或频繁更新，
+或者存在潜在的文档大小限制问题，那么引用文档更为合适。为了减缓系统压力，也可以由南京邮电大学硕士研究生学位论文 第五章 异构数据库迁移中的重写转换 
+ 59 
+用户根据对数据表结构的了解，手动选择转换策略。 
+5.3.3 RDB 与键值数据库的迁移转换 
+Redis 作为内存数据结构存储，用作数据库、缓存和消息代理，其本身允许存储的数据规
+模较小，常用作于关系型数据库的主存同步，因此如何将键值对存储结构转换为关系表结构，
+是适配 Redis 的主要内容。 
+当将关系表格式转换为键值对格式时，由于 Redis 使用键值模型存储数据，无法直接实现
+数据一对多的关系嵌套转换。由于底层结构的差异，无论采用内嵌（将一组数据嵌入一组键
+值对中）还是引用（引用对象标识），都会提升对应 Redis 存储结构的复杂性，提高 SQL 到
+Redis 业务转换难度。因此，本节通过将 MySQL 的数据表存储转换成 Redis 散列结构的形式，
+实现模式转换算法，针对不同 table 关联情况，采取合适的策略转换：（1）当 RDB 中的 table
+关系图是一对一或一对多关系时，对应的键值存储以关系表名和此表的主键的值拼接组成 key，
+以主键字段值为散列结构中具有唯一性的 field，将其他 column 字段转换为 JSON 数据作为
+value；（2）当 RDB 的 table 关系图是多对多关联时，以此关系表名称和组合主键中列值的拼
+接组成 key，通过外键约束字段组合拼接成为 field，其 value 为一组由其他 column 字段名组
+成的 JSON 结构。其基本原理如图 5.3 所示。 
+ 
+图 5.3 RDB 到 Redis 模式转换原理 
+ 
+图 5.4 模式转换后的键值存储架构 
+例如一个 MySQL 的 RBAC 模型中，分别用户表（sys_user）和角色表（sys_role）存储用
+户及角色信息，并使用用户角色关联表（sys_user_role），通过用户 ID 和角色 ID 外键建立用
+户与角色之间的关联关系，并用“salary”表示用户担任相应角色的薪酬。在 RBAC 模型中，南京邮电大学硕士研究生学位论文 第五章 异构数据库迁移中的重写转换 
+ 60 
+一个用户可以拥有多个角色，而一个角色也可以被分配给多个用户。因此，用户角色关联表
+通常采用多对多的关系设计，此 RBAC 模型进行模式转换后的键值存储架构如图 5.4 所示。
+如下算法描述了从 RDB 到键值数据库的模式转换过程： 
+算法 5.3：从 RDB 到键值模型的模式转换 
+输入：RelGraph 表关联图结构和 SchemaField 元数据表 
+输出：redisMetadata 元数据表 
+1 OneToOne [] ←从 RelGraph 提取一对一关系 
+2 OneToMany [] ←从 RelGraph 提取一对多关系 
+3 ManyToMany [] ←从 RelGraph 提取多对多关系 
+4 Foreach table t∈schemaField.getTables() // 获取元数据表中所有基础表 
+5 tableName←t.getTableName() 
+6 If t∈{OneToOne[], OneToMany[]} //涉及一对一或一对多关系的 table 
+7 pKey←t.getPK() //获取组件约束 
+8 Key← tableName+”:”+ pk.getColumnValue() //通过连接表名和主键列的值来构造 key 
+9 Elseif t∈ManyToMany[] //涉及多对多关系的 table 
+10 pKeys[]←t.getPKs() //获取组合主键 
+11 
+Key← tableName +”:”+ pks.getPKsValueConcatenated () //获取组合主键中列的值， 
+//与表名组合为 key 
+12 End 
+13 Value←e.getColumnNamesAndValues() //通过生成一组键值对来构造 value 
+14 redisMetadata←Emits(Key, Value) // 将键对和键值对存储在 redis 元数据中 
+16 End 
+通过将元数据分析阶段后，需要先调用算法将 RDB 元数据表转换为 Redis 的元数据表
+RedisMetadata，以 Redis 的 Hash 散列结构描述 MySQL 中的数据，然后基于 RedisMetadata 和
+预编写的映射策略，实现 SQL 语句到 Redis 的重写转换，如表 5.4 所示。 
+表 5.4 SQL 到 Redis 的转换 
+序号 SQL 语句 Redis 语句 
+1 
+insert into actors (first_name, last_name, 
+gender)values(‘ahmed’, ‘kazim’, ‘m’) 
+hmset actors:first_name ‘ahmed’ 
+last_name ‘kazim’ gender ‘m’ 
+2 
+update actors SET gender= ‘f’, last_name = 
+‘gamal’ WHERE id = 845467 
+hmset actors:845467 gender ‘f’ 
+last_name ‘gamal’ 
+3 delete from actors where id = 3 DEL actors:3 南京邮电大学硕士研究生学位论文 第五章 异构数据库迁移中的重写转换 
+ 61 
+在转换过程中，需要考虑一些因素，如数据的一致性、完整性、性能和可扩展性。此外，
+还需要根据具体的应用场景和需求来选择合适的 NoSQL 数据结构来存储数据。 
+此外，虽然 Redis 作为一个内存数据库提供了高速的数据访问服务，但对于复杂查询业务
+和数据持久化的支持可能不如关系型数据库。在某些业务场景中，如金融、电商等，对数据
+的一致性和完整性有严格要求，可能会选择将实时数据存储在 Redis，随后迁移到关系型数据
+库。以下是每种 Redis 数据结构到关系表结构的模式转换思路： 
+⚫ String：在关系表中，每个 string 可以是一个记录，其中键是列名，值是数据。如果有很
+多相同类型的 strings，可以设计一个表来存储这些键值对。 
+⚫ List：列表可以转换为表中的多行数据。每个元素都是表中的一行，可能需要一个额外的
+列来标识元素的顺序。如果 list 中的元素是固定的或已知的结构，可以将它们展开为多
+个列。 
+⚫ Map (Hash in Redis)：哈希表可以映射到关系表的行和列。每个字段/值对都是表中的一列。
+可以创建一个表，其中键是列名，值是数据。 
+⚫ Set：集合中的每个元素可以转换为表中的一行。可能需要一个额外的列来存储元素的唯
+一标识符（如果 Redis 的 set 中没有额外的信息来表示这一点）。 
+⚫ ZSet (Sorted Set in Redis)：有序集合可以转换为包含分数和元素的两列的表。如果元素本
+身具有结构，可以将其展开为多个列，并包括一个分数列。 
+ 实验测试与结果分析 
+5.4.1 实验设计 
+为了更全面地评估迁移工具在不同场景下的性能和能力，以更准确地了解面向异构数据
+库迁移的语法重写器在实际应用中的表现，本章实验划分为关系型数据库（RDB）之间的迁
+移转化以及 RDB 到 NoSQL 数据库的迁移，分别进行实验。下文以“G-Rewriter”代指“语法
+重写器”。 
+对于关系型数据库之间的迁移，如 Oracle 到 MySQL 的迁移，需要重点关注数据结构、数
+据完整性维护以及迁移后业务性能等因素，这通常涉及到表结构、数据类型、系统函数、等
+数据库对象的转换。本系统已完全支持迁移的 RDB 有 Oracle、MySQL 和 SQL Server，为了
+检验重写转换器 SQL 语法转换功能的准确性和执行性能，实验将与开源的数据和分析平台迁
+移工具 SqlLines（http://www.sqlines.com/home）进行对比。SqlLines 具有广泛的兼容性，能够南京邮电大学硕士研究生学位论文 第五章 异构数据库迁移中的重写转换 
+ 62 
+实现异构数据库系统之间无缝迁移，无需担心数据格式或结构的问题。实验测试样例由
+ANTLR 语法规则仓库（antlr/grammars-v4：https://github.com/antlr/grammars-v4/sql）样例整理，
+其中 16 条为跨平台兼容语句，包括建表、改表、增删改查等，其余样例包括 36 条 Oracle 方
+言，31 条 MySQL 方言，和 23 条 SQL Server 方言，包含数据类型、标准函数、专业语法以及
+DDL 和 DML 特殊操作，基本覆盖了本文所有支持转换类型，都保证了语法语义的正确性。 
+对于 RDB 到 NoSQL 数据库的迁移，由于 NoSQL 数据库与关系型数据库在数据结构、查
+询方式、事务处理等方面存在显著差异，相较 RDB 之间的迁移，其复杂性通常更高。因此迁
+移工具在将 SQL 业务转换为功能近似的目标平台语句外，还需要能够处理存储模式差异，实
+现从关系型模型到 NoSQL 模型的转换。为有效评估查询重写器器的在 RDB 向 NoSQL 数据
+库迁移，实验使用mongo-jdbc作为MySQL和MongoDB的桥接工具，测试MySQL到MongoDB
+的对于迁移准确性、迁移效率和执行性能。实验将 1GB 的 TPC-H 基准集数据导入 MySQL，
+抽取部分数据导入 MongoDB，基于 tpc-h 数据模型生成真实的 SQL 业务语句，用于对迁移后
+数据源进行 CURD 操作，比较二者的对 MySQL 到 MongoDB 迁移能力。 
+5.4.2 实验结果与分析 
+（1）SQL 语法转换实验结果分析 
+本实验主要比较 G-Rewriter 与 SqlLines 工具对 SQL 方言的识别和转换能力，并检验转换
+结果的准确性。将能够根据源平台正确识别出 SQL 方言的业务语句占源平台测试语句的比率
+为正确识别率；将经转化后能在目标平台上正确执行的业务语句占相应源平台所有测试语句
+的比率称为正确转换率。相应的识别与转换情况对比如图 5.5 和 5.6 所示： 
+ 
+图 5.5 正确识别率对比图 
+由于测试样例中存在 16 条为跨平台兼容语句，即无需转换、能够直接在目标平台运行的
+语句，按“正确识别率”需要在三种不同源数据库类型下分别计算，因此综合正确识别率同南京邮电大学硕士研究生学位论文 第五章 异构数据库迁移中的重写转换 
+ 63 
+样基于“能够正确识别语句总数/测试语句总数”计算而来。由图 5.5 可知，对于数据库迁移
+中存在的兼容性问题，本文开发的 G-Rewriter 的平均正确识别率为 100%，即能够识别出样例
+中的所有 SQL 方言，而 SqlLines 工具的综合正确识别率仅为有 93.4%，缺乏的对 Merge 语
+句、不兼容对象命名、嵌套操作的转换策略。 
+ 
+图 5.6 正确转换率对比图 
+图 5.6 显示了 G-Rewriter 与 SqlLines 对于迁移前后业务语句执行情况。转换失败的情况
+既包括无法识别样例存在的不兼容问题，也包括转换后存在语法、语义问题导致目标平台业
+务逻辑出错的情况。经过计算，G-Rewriter 的综合正确率 97.2%，而 SqlLines 的正确率为 85.8%。
+经过分析，重写重写器转换失败的原因主要分为两种： 
+①数据库对象的命名规则冲突。不同数据库系统对对象名的命名规则、长度限制有所不
+同。Oracle 对象命名必须以字母开头，允许使用数字、字母和#、$、_，不允许空格和*，而
+MySQL 不支持特殊字符。G-Rewriter 能够识别相关问题并进行适当的转换或转义，但本文方
+法缺少相应的重命名模块。 
+②数据库处理机制差异。不同数据库对空值的处理和类型转换不同，导致业务语句经过转
+换后，在目标平台的操作结果存在不一致。Oracle 使用||运算符连接字符串，如果其中一个操
+作数值为 NULL，则会被隐式转换为空字符串。而 MySQL 不支持||运算符，通过 CONCAT 实
+现字符串拼接，当 CONCAT 函数的任何参数为 NULL 时，拼接结果将为 NULL。 
+相较于SqlLines，G-Rewriter基于语义分析和元数据存储对于业务语句进行预处理和分析，
+结合元数据进行了更为精准的处理，对于专有语法、复杂嵌套查询、多数据源联接、数值处
+理等内容的转换表现出更高的准确性。实验证明，在 RDB 之间的迁移业务中，G-Rewriter 能
+够实现高质量、高准确性的自动语法转换。 
+（2）RDB 与 NoSQL 的迁移转换实验结果分析 
+本节实验通过将 G-Rewriter 与 mongo-jdbc 插入、删除、更新和查询操作的时间开销进行
+对比，以评估多源异构解析转换器的 SQL 覆盖率和各项访问操作的性能。测试样例基于 TPC-南京邮电大学硕士研究生学位论文 第五章 异构数据库迁移中的重写转换 
+ 64 
+H 数据模型进行修改，涉及单行插入修改、批量插入修改、分组排序、多表关联、复杂过滤、
+数据统计等内容，基本覆盖 RDB 与 NoSQL 常用 CURD 业务，部分测试样例如表 5.5 所示。 
+表 5.5 RDB 到 MongoDB 的迁移样例表 
+编号 SQL 样例 
+C1 INSERT INTO orders (o_custkey, o_orderstatus, o_totalprice, o_orderdate, 
+o_orderpriority, o_clerk, o_shippriority, o_comment) VALUES ( 345, 'O', 1234.56, 
+'1992-01-01', '5-LOW', 'Clerk#000000001', 0, 'This is a comment for order 10000'); 
+C2 INSERT INTO lineitem (l_orderkey, l_partkey, l_suppkey, l_linenumber, l_quantity, 
+l_extendedprice, l_discount, l_tax, l_returnflag, l_linestatus, l_shipdate, 
+l_commitdate, l_receiptdate, l_shipinstruct, l_shipmode, l_comment) 
+VALUES 
+(10001, 1, 100, 1, 10, 100.00, 0.05, 0.03, 'N', 'F', '1992-01-02', '1992-01-10', 
+'1992-01-15', 'DELIVER IN PERSON', 'TRUCK', 'Comment for lineitem 10001, line 1'), 
+(10002, 2, 200, 2, 20, 200.00, 0.10, 0.04, 'N', 'O', '1992-01-03', '1992-01-11', 
+'1992-01-16', 'TAKE BACK RETURN', 'AIR', 'Comment for lineitem 10001, line 2'); 
+U1 UPDATE lineitem SET l_shipmode = 'RAIL' WHERE l_shipmode = 'TRUCK' AND 
+l_receiptdate IS NOT NULL; 
+U2 UPDATE lineitem SET l_extendedprice = l_extendedprice * 1.10, l_discount = 
+l_discount + 0.02 WHERE l_orderkey = 10001 AND l_linenumber = 1; 
+R1 SELECT l_returnflag, COUNT(*) AS num_returns FROM lineitem 
+GROUP BY l_returnflag ORDER BY num_returns DESC; 
+R2 SELECT o_orderkey, o_totalprice FROM orders WHERE o_custkey IN ( SELECT c_custkey 
+FROM customer WHERE c_nationkey = 5 ); 
+R3 SELECT o_orderkey, o_orderdate, o_totalprice * (1 + o_discount) AS 
+adjusted_total_price FROM orders WHERE YEAR(o_orderdate) = 1993; 
+R4 SELECT p.p_name, s.s_name, ps.ps_supplycost * ps.ps_availqty AS total_supply_cost 
+FROM part p JOIN partsupp ps ON p.p_partkey = ps.ps_partkey JOIN supplier s ON 
+ps.ps_suppkey = s.s_suppkey 
+WHERE p.p_type = 'ECONOMY ANODIZED STEEL'; 
+D1 DELETE FROM lineitem WHERE l_orderkey IN (10002, 10003, 10004); 
+D2 DELETE FROM customer WHERE c_nationkey = 15 AND c_acctbal < 1000.00; 
+表 5.6 是测试样例通过 Q-Rewriter 转换和 mongo-jdbc 转换迁移的开销以及在 MongoDB
+的执行时间对比，时间单位为毫秒（ms）。其中，响应时间即为业务的迁移转换耗时和在目
+标平台执行耗时之和。 
+表 5.6 CURD 性能测试结果对比 
+编号 
+mongo-jdbc G-Rewriter 
+响应时间/ms 转换耗时/ms 执行耗时/ms 响应时间/ms 转换耗时/ms 执行耗时/ms 
+C1 68 25 43 95 43 52 
+C2 84 37 47 104 49 55 
+U1 97 29 68 75 23 52 南京邮电大学硕士研究生学位论文 第五章 异构数据库迁移中的重写转换 
+ 65 
+U2 109 34 75 92 25 67 
+R1 621 59 562 422 65 357 
+R2 518 73 445 490 92 398 
+R3 337 84 253 270 103 167 
+R4 728 104 624 597 129 468 
+D1 111 28 83 84 23 63 
+D2 96 23 73 83 16 67 
+由实验数据可知，在语法转换方面，G-Rewriter 较 mogo-jdbc 在 UPDATE 和 DELETE 操
+作仅快 2~9ms，没有明显优势，而在 INSERT 和 SELECT 的转换操作上，C1、C2、R1、R2、
+R3、R4 由 Q-Rewriter 转换时间较 mongo-jdbc 落后 18ms、12ms、6ms、19ms、19ms 和 25ms，
+这主要由于在 RDB 到 NoSQL 的迁移环境中，相较于删改操作，ISNERT 写操作需要分析数
+据表结构分析与模式转换和模式转换，造成了额外开销；而 SELECT 读操作样例涉及嵌套查
+询、多表连接、过滤条件式等的复杂业务的解析和转换，平均转换开销更大。但总体而言，
+这些额外开销是可以接受的。 
+而在转换迁移后业务语句在 MongoDB 的执行效率可知，经由 G-Rewriter 和 mongo-jdbc
+转换迁移后，G-Rewriter 的运算结果较 mongo-jdbc 在 INSERT、UPDATE 和 DELETE 操作上
+更加高效，平均快 5.5ms，总体没有太大优势；而通过 RDB 到文档模型的模式转换，根据策
+略选用引用或嵌套策略，G-Rewriter 生成的查询操作平均比 mongo-jdbc 的迁移结构快
+134.75ms，说明 G-Rewriter 在 RDB 到 NoSQL 迁移中，进行模式转换的策略是相当有效的。 
+实验结果证明，本文的语法重写器能够正确识别并转换关系型数据为 NoSQL 的数据存储
+结构并实现相应的语法转换，同时要保证业务逻辑的准确性。 
+ 本章小结 
+本章主要介绍了基于中间表示结构开发的、维护语义一致性的语法转换器开发流程。本文
+首先总结了 SQL 数据库之间、SQL 与 NoSQL 数据库之间的语法及结构差异；然后，编写了
+一系列语法转换规则，以可扩展的方式实现了异构语法的转换方法；最后，我们设计了一系
+列实验，重点关注重写器的转换结果在语法、语义上的准确性。实验最终证明，语法重写器
+能够正确识别语法方言，并转换成符合业务目标的目标数据库语句。 
