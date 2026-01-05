@@ -1,0 +1,313 @@
+-- ============================================================
+-- SMV Model (Auto-generated from PML)
+-- ============================================================
+
+MODULE main
+
+VAR
+  turn :  {P_Network, P_DCCP_AtoN, P_DCCP_BtoN};
+
+  AtoN : {EMPTY, DCCP_REQUEST, DCCP_RESPONSE, DCCP_DATA, DCCP_ACK, DCCP_DATAACK, DCCP_CLOSEREQ, DCCP_CLOSE, DCCP_RESET, DCCP_SYNC, DCCP_SYNCACK};
+  NtoA : {EMPTY, DCCP_REQUEST, DCCP_RESPONSE, DCCP_DATA, DCCP_ACK, DCCP_DATAACK, DCCP_CLOSEREQ, DCCP_CLOSE, DCCP_RESET, DCCP_SYNC, DCCP_SYNCACK};
+  BtoN : {EMPTY, DCCP_REQUEST, DCCP_RESPONSE, DCCP_DATA, DCCP_ACK, DCCP_DATAACK, DCCP_CLOSEREQ, DCCP_CLOSE, DCCP_RESET, DCCP_SYNC, DCCP_SYNCACK};
+  NtoB : {EMPTY, DCCP_REQUEST, DCCP_RESPONSE, DCCP_DATA, DCCP_ACK, DCCP_DATAACK, DCCP_CLOSEREQ, DCCP_CLOSE, DCCP_RESET, DCCP_SYNC, DCCP_SYNCACK};
+
+  Network_s : {__init_Network, _DUMMY};
+  DCCP_AtoN_s : {CLOSED, LISTEN, REQUEST, RESPOND, PARTOPEN, OPEN, CLOSEREQ, CLOSING, TIMEWAIT};
+  DCCP_AtoN_I_am_active : boolean;
+  DCCP_BtoN_s : {CLOSED, LISTEN, REQUEST, RESPOND, PARTOPEN, OPEN, CLOSEREQ, CLOSING, TIMEWAIT};
+  DCCP_BtoN_I_am_active : boolean;
+
+ASSIGN
+  init(turn) := {P_Network, P_DCCP_AtoN, P_DCCP_BtoN};
+  init(AtoN) := EMPTY;
+  init(NtoA) := EMPTY;
+  init(BtoN) := EMPTY;
+  init(NtoB) := EMPTY;
+  init(Network_s) := __init_Network;
+  init(DCCP_AtoN_s) := CLOSED;
+  init(DCCP_AtoN_I_am_active) := FALSE;
+  init(DCCP_BtoN_s) := CLOSED;
+  init(DCCP_BtoN_I_am_active) := FALSE;
+
+  next(turn) := {P_Network, P_DCCP_AtoN, P_DCCP_BtoN};
+
+  -- Network state
+  next(Network_s) := case
+    turn != P_Network :  Network_s;
+    Network_s = __init_Network & AtoN = DCCP_ACK & NtoB = EMPTY :  __init_Network;
+    Network_s = __init_Network & AtoN = DCCP_CLOSE & NtoB = EMPTY :  __init_Network;
+    Network_s = __init_Network & AtoN = DCCP_CLOSEREQ & NtoB = EMPTY :  __init_Network;
+    Network_s = __init_Network & AtoN = DCCP_DATA & NtoB = EMPTY :  __init_Network;
+    Network_s = __init_Network & AtoN = DCCP_DATAACK & NtoB = EMPTY :  __init_Network;
+    Network_s = __init_Network & AtoN = DCCP_REQUEST & NtoB = EMPTY :  __init_Network;
+    Network_s = __init_Network & AtoN = DCCP_RESET & NtoB = EMPTY :  __init_Network;
+    Network_s = __init_Network & AtoN = DCCP_RESPONSE & NtoB = EMPTY :  __init_Network;
+    Network_s = __init_Network & AtoN = DCCP_SYNC & NtoB = EMPTY :  __init_Network;
+    Network_s = __init_Network & AtoN = DCCP_SYNCACK & NtoB = EMPTY :  __init_Network;
+    Network_s = __init_Network & BtoN = DCCP_ACK & NtoA = EMPTY :  __init_Network;
+    Network_s = __init_Network & BtoN = DCCP_CLOSE & NtoA = EMPTY :  __init_Network;
+    Network_s = __init_Network & BtoN = DCCP_CLOSEREQ & NtoA = EMPTY :  __init_Network;
+    Network_s = __init_Network & BtoN = DCCP_DATA & NtoA = EMPTY :  __init_Network;
+    Network_s = __init_Network & BtoN = DCCP_DATAACK & NtoA = EMPTY :  __init_Network;
+    Network_s = __init_Network & BtoN = DCCP_REQUEST & NtoA = EMPTY :  __init_Network;
+    Network_s = __init_Network & BtoN = DCCP_RESET & NtoA = EMPTY :  __init_Network;
+    Network_s = __init_Network & BtoN = DCCP_RESPONSE & NtoA = EMPTY :  __init_Network;
+    Network_s = __init_Network & BtoN = DCCP_SYNC & NtoA = EMPTY :  __init_Network;
+    Network_s = __init_Network & BtoN = DCCP_SYNCACK & NtoA = EMPTY :  __init_Network;
+    TRUE :  Network_s;
+  esac;
+
+  -- DCCP_AtoN state
+  next(DCCP_AtoN_s) := case
+    turn != P_DCCP_AtoN :  DCCP_AtoN_s;
+    DCCP_AtoN_s = CLOSED & AtoN = EMPTY :  {LISTEN, REQUEST};
+    DCCP_AtoN_s = CLOSED : LISTEN;
+    DCCP_AtoN_s = LISTEN & NtoA = DCCP_REQUEST & AtoN = EMPTY :  {CLOSED, RESPOND};
+    DCCP_AtoN_s = LISTEN : CLOSED;
+    DCCP_AtoN_s = REQUEST & NtoA = DCCP_RESPONSE & AtoN = EMPTY :  {CLOSED, PARTOPEN};
+    DCCP_AtoN_s = REQUEST & NtoA = DCCP_SYNC & AtoN = EMPTY :  CLOSED;
+    DCCP_AtoN_s = REQUEST & NtoA = DCCP_RESET :  CLOSED;
+    DCCP_AtoN_s = REQUEST : CLOSED;
+    DCCP_AtoN_s = RESPOND & AtoN = EMPTY :  {CLOSED, RESPOND};
+    DCCP_AtoN_s = RESPOND & NtoA = DCCP_ACK :  {CLOSED, OPEN};
+    DCCP_AtoN_s = RESPOND & NtoA = DCCP_DATAACK :  {CLOSED, OPEN};
+    DCCP_AtoN_s = RESPOND : CLOSED;
+    DCCP_AtoN_s = PARTOPEN & NtoA = DCCP_CLOSE & AtoN = EMPTY :  {CLOSED, PARTOPEN};
+    DCCP_AtoN_s = PARTOPEN & NtoA = DCCP_CLOSEREQ & AtoN = EMPTY :  {CLOSED, CLOSING, PARTOPEN};
+    DCCP_AtoN_s = PARTOPEN & NtoA = DCCP_DATA & AtoN = EMPTY :  {CLOSED, OPEN, PARTOPEN};
+    DCCP_AtoN_s = PARTOPEN & NtoA = DCCP_DATAACK & AtoN = EMPTY :  {CLOSED, OPEN, PARTOPEN};
+    DCCP_AtoN_s = PARTOPEN & AtoN = EMPTY :  {CLOSED, PARTOPEN};
+    DCCP_AtoN_s = PARTOPEN & NtoA = DCCP_ACK :  {CLOSED, OPEN};
+    DCCP_AtoN_s = PARTOPEN : CLOSED;
+    DCCP_AtoN_s = OPEN & AtoN = EMPTY & DCCP_AtoN_I_am_active = TRUE :  {CLOSED, CLOSEREQ, CLOSING, OPEN};
+    DCCP_AtoN_s = OPEN & NtoA = DCCP_CLOSE & AtoN = EMPTY :  {CLOSED, OPEN};
+    DCCP_AtoN_s = OPEN & NtoA = DCCP_CLOSEREQ & AtoN = EMPTY :  {CLOSED, CLOSING, OPEN};
+    DCCP_AtoN_s = OPEN & AtoN = EMPTY :  {CLOSED, OPEN};
+    DCCP_AtoN_s = OPEN & NtoA = DCCP_ACK :  {CLOSED, OPEN};
+    DCCP_AtoN_s = OPEN & NtoA = DCCP_DATA :  {CLOSED, OPEN};
+    DCCP_AtoN_s = OPEN & NtoA = DCCP_DATAACK :  {CLOSED, OPEN};
+    DCCP_AtoN_s = OPEN : CLOSED;
+    DCCP_AtoN_s = CLOSEREQ & NtoA = DCCP_CLOSE & AtoN = EMPTY :  CLOSED;
+    DCCP_AtoN_s = CLOSING & NtoA = DCCP_RESET :  {CLOSED, TIMEWAIT};
+    DCCP_AtoN_s = CLOSING : CLOSED;
+    DCCP_AtoN_s = TIMEWAIT : CLOSED;
+    TRUE :  DCCP_AtoN_s;
+  esac;
+
+  -- DCCP_AtoN_I_am_active
+  next(DCCP_AtoN_I_am_active) := case
+    turn != P_DCCP_AtoN : DCCP_AtoN_I_am_active;
+    DCCP_AtoN_s = CLOSED & AtoN = EMPTY : TRUE;
+    DCCP_AtoN_s = CLOSEREQ & NtoA = DCCP_CLOSE & AtoN = EMPTY : FALSE;
+    DCCP_AtoN_s = CLOSING : FALSE;
+    DCCP_AtoN_s = LISTEN & NtoA = DCCP_REQUEST & AtoN = EMPTY : FALSE;
+    DCCP_AtoN_s = LISTEN : FALSE;
+    DCCP_AtoN_s = OPEN & NtoA = DCCP_CLOSE & AtoN = EMPTY : FALSE;
+    DCCP_AtoN_s = OPEN : FALSE;
+    DCCP_AtoN_s = PARTOPEN & NtoA = DCCP_CLOSE & AtoN = EMPTY : FALSE;
+    DCCP_AtoN_s = PARTOPEN : FALSE;
+    DCCP_AtoN_s = REQUEST & NtoA = DCCP_SYNC & AtoN = EMPTY : FALSE;
+    DCCP_AtoN_s = REQUEST & NtoA = DCCP_RESET : FALSE;
+    DCCP_AtoN_s = REQUEST : FALSE;
+    DCCP_AtoN_s = RESPOND & AtoN = EMPTY : FALSE;
+    DCCP_AtoN_s = RESPOND : FALSE;
+    DCCP_AtoN_s = TIMEWAIT : FALSE;
+    TRUE : DCCP_AtoN_I_am_active;
+  esac;
+
+  -- DCCP_BtoN state
+  next(DCCP_BtoN_s) := case
+    turn != P_DCCP_BtoN :  DCCP_BtoN_s;
+    DCCP_BtoN_s = CLOSED & BtoN = EMPTY :  {LISTEN, REQUEST};
+    DCCP_BtoN_s = CLOSED : LISTEN;
+    DCCP_BtoN_s = LISTEN & NtoB = DCCP_REQUEST & BtoN = EMPTY :  {CLOSED, RESPOND};
+    DCCP_BtoN_s = LISTEN : CLOSED;
+    DCCP_BtoN_s = REQUEST & NtoB = DCCP_RESPONSE & BtoN = EMPTY :  {CLOSED, PARTOPEN};
+    DCCP_BtoN_s = REQUEST & NtoB = DCCP_SYNC & BtoN = EMPTY :  CLOSED;
+    DCCP_BtoN_s = REQUEST & NtoB = DCCP_RESET :  CLOSED;
+    DCCP_BtoN_s = REQUEST : CLOSED;
+    DCCP_BtoN_s = RESPOND & BtoN = EMPTY :  {CLOSED, RESPOND};
+    DCCP_BtoN_s = RESPOND & NtoB = DCCP_ACK :  {CLOSED, OPEN};
+    DCCP_BtoN_s = RESPOND & NtoB = DCCP_DATAACK :  {CLOSED, OPEN};
+    DCCP_BtoN_s = RESPOND : CLOSED;
+    DCCP_BtoN_s = PARTOPEN & NtoB = DCCP_CLOSE & BtoN = EMPTY :  {CLOSED, PARTOPEN};
+    DCCP_BtoN_s = PARTOPEN & NtoB = DCCP_CLOSEREQ & BtoN = EMPTY :  {CLOSED, CLOSING, PARTOPEN};
+    DCCP_BtoN_s = PARTOPEN & NtoB = DCCP_DATA & BtoN = EMPTY :  {CLOSED, OPEN, PARTOPEN};
+    DCCP_BtoN_s = PARTOPEN & NtoB = DCCP_DATAACK & BtoN = EMPTY :  {CLOSED, OPEN, PARTOPEN};
+    DCCP_BtoN_s = PARTOPEN & BtoN = EMPTY :  {CLOSED, PARTOPEN};
+    DCCP_BtoN_s = PARTOPEN & NtoB = DCCP_ACK :  {CLOSED, OPEN};
+    DCCP_BtoN_s = PARTOPEN : CLOSED;
+    DCCP_BtoN_s = OPEN & BtoN = EMPTY & DCCP_BtoN_I_am_active = TRUE :  {CLOSED, CLOSEREQ, CLOSING, OPEN};
+    DCCP_BtoN_s = OPEN & NtoB = DCCP_CLOSE & BtoN = EMPTY :  {CLOSED, OPEN};
+    DCCP_BtoN_s = OPEN & NtoB = DCCP_CLOSEREQ & BtoN = EMPTY :  {CLOSED, CLOSING, OPEN};
+    DCCP_BtoN_s = OPEN & BtoN = EMPTY :  {CLOSED, OPEN};
+    DCCP_BtoN_s = OPEN & NtoB = DCCP_ACK :  {CLOSED, OPEN};
+    DCCP_BtoN_s = OPEN & NtoB = DCCP_DATA :  {CLOSED, OPEN};
+    DCCP_BtoN_s = OPEN & NtoB = DCCP_DATAACK :  {CLOSED, OPEN};
+    DCCP_BtoN_s = OPEN : CLOSED;
+    DCCP_BtoN_s = CLOSEREQ & NtoB = DCCP_CLOSE & BtoN = EMPTY :  CLOSED;
+    DCCP_BtoN_s = CLOSING & NtoB = DCCP_RESET :  {CLOSED, TIMEWAIT};
+    DCCP_BtoN_s = CLOSING : CLOSED;
+    DCCP_BtoN_s = TIMEWAIT : CLOSED;
+    TRUE :  DCCP_BtoN_s;
+  esac;
+
+  -- DCCP_BtoN_I_am_active
+  next(DCCP_BtoN_I_am_active) := case
+    turn != P_DCCP_BtoN : DCCP_BtoN_I_am_active;
+    DCCP_BtoN_s = CLOSED & BtoN = EMPTY : TRUE;
+    DCCP_BtoN_s = CLOSEREQ & NtoB = DCCP_CLOSE & BtoN = EMPTY : FALSE;
+    DCCP_BtoN_s = CLOSING : FALSE;
+    DCCP_BtoN_s = LISTEN & NtoB = DCCP_REQUEST & BtoN = EMPTY : FALSE;
+    DCCP_BtoN_s = LISTEN : FALSE;
+    DCCP_BtoN_s = OPEN & NtoB = DCCP_CLOSE & BtoN = EMPTY : FALSE;
+    DCCP_BtoN_s = OPEN : FALSE;
+    DCCP_BtoN_s = PARTOPEN & NtoB = DCCP_CLOSE & BtoN = EMPTY : FALSE;
+    DCCP_BtoN_s = PARTOPEN : FALSE;
+    DCCP_BtoN_s = REQUEST & NtoB = DCCP_SYNC & BtoN = EMPTY : FALSE;
+    DCCP_BtoN_s = REQUEST & NtoB = DCCP_RESET : FALSE;
+    DCCP_BtoN_s = REQUEST : FALSE;
+    DCCP_BtoN_s = RESPOND & BtoN = EMPTY : FALSE;
+    DCCP_BtoN_s = RESPOND : FALSE;
+    DCCP_BtoN_s = TIMEWAIT : FALSE;
+    TRUE : DCCP_BtoN_I_am_active;
+  esac;
+
+  -- AtoN
+  next(AtoN) := case
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = CLOSEREQ & AtoN = EMPTY & NtoA = DCCP_CLOSE :  DCCP_RESET;
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = LISTEN & AtoN = EMPTY & NtoA = DCCP_REQUEST :  {DCCP_RESPONSE, EMPTY};
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = OPEN & AtoN = EMPTY & DCCP_AtoN_I_am_active = TRUE :  {DCCP_CLOSE, DCCP_CLOSEREQ, DCCP_DATA, DCCP_DATAACK, EMPTY};
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = OPEN & AtoN = EMPTY & NtoA = DCCP_CLOSE :  {DCCP_DATA, DCCP_DATAACK, DCCP_RESET, EMPTY};
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = OPEN & AtoN = EMPTY & NtoA = DCCP_CLOSEREQ :  {DCCP_CLOSE, DCCP_DATA, DCCP_DATAACK, EMPTY};
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = PARTOPEN & AtoN = EMPTY & NtoA = DCCP_CLOSE :  {DCCP_DATAACK, DCCP_RESET, EMPTY};
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = PARTOPEN & AtoN = EMPTY & NtoA = DCCP_CLOSEREQ :  {DCCP_CLOSE, DCCP_DATAACK, EMPTY};
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = PARTOPEN & AtoN = EMPTY & NtoA = DCCP_DATA :  {DCCP_ACK, DCCP_DATAACK, EMPTY};
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = PARTOPEN & AtoN = EMPTY & NtoA = DCCP_DATAACK :  {DCCP_ACK, DCCP_DATAACK, EMPTY};
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = REQUEST & AtoN = EMPTY & NtoA = DCCP_RESPONSE :  {DCCP_ACK, EMPTY};
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = REQUEST & AtoN = EMPTY & NtoA = DCCP_SYNC :  {DCCP_RESET, EMPTY};
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = CLOSED & AtoN = EMPTY :  {DCCP_REQUEST, EMPTY};
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = OPEN & AtoN = EMPTY :  {DCCP_DATA, DCCP_DATAACK, EMPTY};
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = PARTOPEN & AtoN = EMPTY :  {DCCP_DATAACK, EMPTY};
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = RESPOND & AtoN = EMPTY :  {DCCP_DATA, DCCP_RESET, EMPTY};
+    turn = P_Network & Network_s = __init_Network & AtoN = DCCP_REQUEST & NtoB = EMPTY :  EMPTY;
+    turn = P_Network & Network_s = __init_Network & AtoN = DCCP_RESPONSE & NtoB = EMPTY :  EMPTY;
+    turn = P_Network & Network_s = __init_Network & AtoN = DCCP_DATA & NtoB = EMPTY :  EMPTY;
+    turn = P_Network & Network_s = __init_Network & AtoN = DCCP_ACK & NtoB = EMPTY :  EMPTY;
+    turn = P_Network & Network_s = __init_Network & AtoN = DCCP_DATAACK & NtoB = EMPTY :  EMPTY;
+    turn = P_Network & Network_s = __init_Network & AtoN = DCCP_CLOSEREQ & NtoB = EMPTY :  EMPTY;
+    turn = P_Network & Network_s = __init_Network & AtoN = DCCP_CLOSE & NtoB = EMPTY :  EMPTY;
+    turn = P_Network & Network_s = __init_Network & AtoN = DCCP_RESET & NtoB = EMPTY :  EMPTY;
+    turn = P_Network & Network_s = __init_Network & AtoN = DCCP_SYNC & NtoB = EMPTY :  EMPTY;
+    turn = P_Network & Network_s = __init_Network & AtoN = DCCP_SYNCACK & NtoB = EMPTY :  EMPTY;
+    TRUE : AtoN;
+  esac;
+
+  -- NtoA
+  next(NtoA) := case
+    turn = P_Network & Network_s = __init_Network & NtoA = EMPTY & BtoN = DCCP_ACK :  DCCP_ACK;
+    turn = P_Network & Network_s = __init_Network & NtoA = EMPTY & BtoN = DCCP_CLOSE :  DCCP_CLOSE;
+    turn = P_Network & Network_s = __init_Network & NtoA = EMPTY & BtoN = DCCP_CLOSEREQ :  DCCP_CLOSEREQ;
+    turn = P_Network & Network_s = __init_Network & NtoA = EMPTY & BtoN = DCCP_DATA :  DCCP_DATA;
+    turn = P_Network & Network_s = __init_Network & NtoA = EMPTY & BtoN = DCCP_DATAACK :  DCCP_DATAACK;
+    turn = P_Network & Network_s = __init_Network & NtoA = EMPTY & BtoN = DCCP_REQUEST :  DCCP_REQUEST;
+    turn = P_Network & Network_s = __init_Network & NtoA = EMPTY & BtoN = DCCP_RESET :  DCCP_RESET;
+    turn = P_Network & Network_s = __init_Network & NtoA = EMPTY & BtoN = DCCP_RESPONSE :  DCCP_RESPONSE;
+    turn = P_Network & Network_s = __init_Network & NtoA = EMPTY & BtoN = DCCP_SYNC :  DCCP_SYNC;
+    turn = P_Network & Network_s = __init_Network & NtoA = EMPTY & BtoN = DCCP_SYNCACK :  DCCP_SYNCACK;
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = LISTEN & NtoA = DCCP_REQUEST & AtoN = EMPTY :  EMPTY;
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = REQUEST & NtoA = DCCP_RESPONSE & AtoN = EMPTY :  EMPTY;
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = REQUEST & NtoA = DCCP_RESET :  EMPTY;
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = REQUEST & NtoA = DCCP_SYNC & AtoN = EMPTY :  EMPTY;
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = RESPOND & NtoA = DCCP_ACK :  EMPTY;
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = RESPOND & NtoA = DCCP_DATAACK :  EMPTY;
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = PARTOPEN & NtoA = DCCP_DATA & AtoN = EMPTY :  EMPTY;
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = PARTOPEN & NtoA = DCCP_DATAACK & AtoN = EMPTY :  EMPTY;
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = PARTOPEN & NtoA = DCCP_CLOSEREQ & AtoN = EMPTY :  EMPTY;
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = PARTOPEN & NtoA = DCCP_CLOSE & AtoN = EMPTY :  EMPTY;
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = PARTOPEN & NtoA = DCCP_ACK :  EMPTY;
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = OPEN & NtoA = DCCP_ACK :  EMPTY;
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = OPEN & NtoA = DCCP_DATA :  EMPTY;
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = OPEN & NtoA = DCCP_DATAACK :  EMPTY;
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = OPEN & NtoA = DCCP_CLOSE & AtoN = EMPTY :  EMPTY;
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = OPEN & NtoA = DCCP_CLOSEREQ & AtoN = EMPTY :  EMPTY;
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = CLOSEREQ & NtoA = DCCP_CLOSE & AtoN = EMPTY :  EMPTY;
+    turn = P_DCCP_AtoN & DCCP_AtoN_s = CLOSING & NtoA = DCCP_RESET :  EMPTY;
+    TRUE : NtoA;
+  esac;
+
+  -- BtoN
+  next(BtoN) := case
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = CLOSEREQ & BtoN = EMPTY & NtoB = DCCP_CLOSE :  DCCP_RESET;
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = LISTEN & BtoN = EMPTY & NtoB = DCCP_REQUEST :  {DCCP_RESPONSE, EMPTY};
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = OPEN & BtoN = EMPTY & DCCP_BtoN_I_am_active = TRUE :  {DCCP_CLOSE, DCCP_CLOSEREQ, DCCP_DATA, DCCP_DATAACK, EMPTY};
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = OPEN & BtoN = EMPTY & NtoB = DCCP_CLOSE :  {DCCP_DATA, DCCP_DATAACK, DCCP_RESET, EMPTY};
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = OPEN & BtoN = EMPTY & NtoB = DCCP_CLOSEREQ :  {DCCP_CLOSE, DCCP_DATA, DCCP_DATAACK, EMPTY};
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = PARTOPEN & BtoN = EMPTY & NtoB = DCCP_CLOSE :  {DCCP_DATAACK, DCCP_RESET, EMPTY};
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = PARTOPEN & BtoN = EMPTY & NtoB = DCCP_CLOSEREQ :  {DCCP_CLOSE, DCCP_DATAACK, EMPTY};
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = PARTOPEN & BtoN = EMPTY & NtoB = DCCP_DATA :  {DCCP_ACK, DCCP_DATAACK, EMPTY};
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = PARTOPEN & BtoN = EMPTY & NtoB = DCCP_DATAACK :  {DCCP_ACK, DCCP_DATAACK, EMPTY};
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = REQUEST & BtoN = EMPTY & NtoB = DCCP_RESPONSE :  {DCCP_ACK, EMPTY};
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = REQUEST & BtoN = EMPTY & NtoB = DCCP_SYNC :  {DCCP_RESET, EMPTY};
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = CLOSED & BtoN = EMPTY :  {DCCP_REQUEST, EMPTY};
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = OPEN & BtoN = EMPTY :  {DCCP_DATA, DCCP_DATAACK, EMPTY};
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = PARTOPEN & BtoN = EMPTY :  {DCCP_DATAACK, EMPTY};
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = RESPOND & BtoN = EMPTY :  {DCCP_DATA, DCCP_RESET, EMPTY};
+    turn = P_Network & Network_s = __init_Network & BtoN = DCCP_REQUEST & NtoA = EMPTY :  EMPTY;
+    turn = P_Network & Network_s = __init_Network & BtoN = DCCP_RESPONSE & NtoA = EMPTY :  EMPTY;
+    turn = P_Network & Network_s = __init_Network & BtoN = DCCP_DATA & NtoA = EMPTY :  EMPTY;
+    turn = P_Network & Network_s = __init_Network & BtoN = DCCP_ACK & NtoA = EMPTY :  EMPTY;
+    turn = P_Network & Network_s = __init_Network & BtoN = DCCP_DATAACK & NtoA = EMPTY :  EMPTY;
+    turn = P_Network & Network_s = __init_Network & BtoN = DCCP_CLOSEREQ & NtoA = EMPTY :  EMPTY;
+    turn = P_Network & Network_s = __init_Network & BtoN = DCCP_CLOSE & NtoA = EMPTY :  EMPTY;
+    turn = P_Network & Network_s = __init_Network & BtoN = DCCP_RESET & NtoA = EMPTY :  EMPTY;
+    turn = P_Network & Network_s = __init_Network & BtoN = DCCP_SYNC & NtoA = EMPTY :  EMPTY;
+    turn = P_Network & Network_s = __init_Network & BtoN = DCCP_SYNCACK & NtoA = EMPTY :  EMPTY;
+    TRUE : BtoN;
+  esac;
+
+  -- NtoB
+  next(NtoB) := case
+    turn = P_Network & Network_s = __init_Network & NtoB = EMPTY & AtoN = DCCP_ACK :  DCCP_ACK;
+    turn = P_Network & Network_s = __init_Network & NtoB = EMPTY & AtoN = DCCP_CLOSE :  DCCP_CLOSE;
+    turn = P_Network & Network_s = __init_Network & NtoB = EMPTY & AtoN = DCCP_CLOSEREQ :  DCCP_CLOSEREQ;
+    turn = P_Network & Network_s = __init_Network & NtoB = EMPTY & AtoN = DCCP_DATA :  DCCP_DATA;
+    turn = P_Network & Network_s = __init_Network & NtoB = EMPTY & AtoN = DCCP_DATAACK :  DCCP_DATAACK;
+    turn = P_Network & Network_s = __init_Network & NtoB = EMPTY & AtoN = DCCP_REQUEST :  DCCP_REQUEST;
+    turn = P_Network & Network_s = __init_Network & NtoB = EMPTY & AtoN = DCCP_RESET :  DCCP_RESET;
+    turn = P_Network & Network_s = __init_Network & NtoB = EMPTY & AtoN = DCCP_RESPONSE :  DCCP_RESPONSE;
+    turn = P_Network & Network_s = __init_Network & NtoB = EMPTY & AtoN = DCCP_SYNC :  DCCP_SYNC;
+    turn = P_Network & Network_s = __init_Network & NtoB = EMPTY & AtoN = DCCP_SYNCACK :  DCCP_SYNCACK;
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = LISTEN & NtoB = DCCP_REQUEST & BtoN = EMPTY :  EMPTY;
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = REQUEST & NtoB = DCCP_RESPONSE & BtoN = EMPTY :  EMPTY;
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = REQUEST & NtoB = DCCP_RESET :  EMPTY;
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = REQUEST & NtoB = DCCP_SYNC & BtoN = EMPTY :  EMPTY;
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = RESPOND & NtoB = DCCP_ACK :  EMPTY;
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = RESPOND & NtoB = DCCP_DATAACK :  EMPTY;
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = PARTOPEN & NtoB = DCCP_DATA & BtoN = EMPTY :  EMPTY;
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = PARTOPEN & NtoB = DCCP_DATAACK & BtoN = EMPTY :  EMPTY;
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = PARTOPEN & NtoB = DCCP_CLOSEREQ & BtoN = EMPTY :  EMPTY;
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = PARTOPEN & NtoB = DCCP_CLOSE & BtoN = EMPTY :  EMPTY;
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = PARTOPEN & NtoB = DCCP_ACK :  EMPTY;
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = OPEN & NtoB = DCCP_ACK :  EMPTY;
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = OPEN & NtoB = DCCP_DATA :  EMPTY;
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = OPEN & NtoB = DCCP_DATAACK :  EMPTY;
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = OPEN & NtoB = DCCP_CLOSE & BtoN = EMPTY :  EMPTY;
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = OPEN & NtoB = DCCP_CLOSEREQ & BtoN = EMPTY :  EMPTY;
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = CLOSEREQ & NtoB = DCCP_CLOSE & BtoN = EMPTY :  EMPTY;
+    turn = P_DCCP_BtoN & DCCP_BtoN_s = CLOSING & NtoB = DCCP_RESET :  EMPTY;
+    TRUE : NtoB;
+  esac;
+
+-- Fairness constraints
+FAIRNESS turn = P_Network
+FAIRNESS turn = P_DCCP_AtoN
+FAIRNESS turn = P_DCCP_BtoN
+
+-- CTL Properties
+SPEC EF (DCCP_AtoN_s = OPEN & DCCP_BtoN_s = OPEN)
+SPEC EF (DCCP_AtoN_s = OPEN)
+SPEC EF (DCCP_BtoN_s = OPEN)
+SPEC AG (DCCP_AtoN_s = CLOSEREQ -> DCCP_AtoN_I_am_active = TRUE)
+SPEC AG (DCCP_BtoN_s = CLOSEREQ -> DCCP_BtoN_I_am_active = TRUE)
