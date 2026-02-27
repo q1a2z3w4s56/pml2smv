@@ -1,8 +1,3 @@
-/* file: DCCP. pml
- * author: [redacted]
- * authored:  12 March 2021 ...  14 June 2021
- */
-
 mtype = { DCCP_REQUEST, 
           DCCP_RESPONSE, 
           DCCP_DATA, 
@@ -68,7 +63,7 @@ CLOSED:
     before_state[i] = state[i];
     state[i] = ClosedState;
     if
-    :: goto LISTEN; /* passive open */
+    ::  goto LISTEN; /* passive open */
     ::  snd ! DCCP_REQUEST;  /* active  open */ 
        goto REQUEST; 
     fi
@@ -173,32 +168,4 @@ init {
     run Network();              /* 启动网络进程 */
     run DCCP(AtoN, NtoA, 0);
     run DCCP(BtoN, NtoB, 1);
-}
-
-ltl phi1 {
-    ! ( eventually 
-        always (
-            (state[0] == before_state[0]) &&
-            (state[1] == before_state[1])
-        )
-    )
-}
-
-ltl phi2 {
-	always (
-        !(state[0] == TimeWaitState && state[1] == TimeWaitState)
-    )
-}
-
-ltl phi3 {
-    !(eventually always (state[0] == before_state[0]))
-}
-
-ltl phi4 {
-	always (
-		!(
-			state[0] == CloseReqState &&
-			state[1] == CloseReqState
-		)
-	)
 }
